@@ -39,6 +39,7 @@ _CELL_REF_RE = re.compile(
     r"(?P<sheet>(?:'[^']+'|[A-Za-z_][A-Za-z0-9_.]*)!)?"
     r"(?P<colabs>\$)?(?P<col>[A-Za-z]{1,3})"
     r"(?P<rowabs>\$)?(?P<row>\d+)"
+    r"(?![A-Za-z0-9_(])"
 )
 
 

@@ -56,3 +56,9 @@ def test_shift_lookup_with_full_column_refs_unchanged():
     formula = "=(LOOKUP($A2-1, Johansen_Monthly!$G:$G, Johansen_Monthly!$H:$H)*D2)"
     shifted = shift_formula_rows(formula, 1)
     assert shifted == "=(LOOKUP($A3-1, Johansen_Monthly!$G:$G, Johansen_Monthly!$H:$H)*D3)"
+
+def test_shift_does_not_corrupt_trailing_identifier_text():
+    assert shift_formula_rows("=A2Value", 1) == "=A2Value"
+
+def test_shift_does_not_corrupt_function_name_collision():
+    assert shift_formula_rows("=LOG10(A2)", 1) == "=LOG10(A3)"
