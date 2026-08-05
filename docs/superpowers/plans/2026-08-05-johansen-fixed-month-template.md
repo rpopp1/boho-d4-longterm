@@ -17,7 +17,7 @@
 - Every scattered literal constant from Dec's Position Model / Matrices sheets must be replaced by a workbook-scoped Excel defined name bound to a Config sheet cell.
 - The Johansen_Monthly "Active End Row" pointer must be a self-updating last-row formula, not a hardcoded cell reference.
 - The Position Model per-calendar-year PnL breakdown must derive years dynamically from the Date column, not use hardcoded per-year row ranges.
-- This directory is not a git repository — skip all `git commit` steps; each task's "commit" step is replaced with "save and verify the file/script is in place."
+- A git repository was initialized in this folder specifically to support this plan's execution (task-scoped commits, diffable review packages); `.xlsx`/`.xls`/`.xlsm` files are gitignored and never tracked. Each task's "save checkpoint" step means a normal `git commit` of the files that task created/modified.
 
 ---
 
@@ -48,7 +48,9 @@ C:\Users\Ryan Popp\OneDrive - Karbone Inc\Desktop\Renewable Fuels Analysis\RINs\
 
 Run: `py -c "print(open(r'scripts\DEC_SOURCE_PATH.txt').read().strip())"` from the `BOHO Trading` directory — output must match the path above exactly, with no trailing newline issues.
 
-- [ ] **Step 4: Save checkpoint** (no git in this repo — confirm the file exists via `ls scripts/`)
+- [ ] **Step 4: Save checkpoint**
+
+Run: `git add scripts/DEC_SOURCE_PATH.txt && git commit -m "Add canonical source workbook path reference"`
 
 ---
 
@@ -1394,13 +1396,19 @@ def _recalculate_with_excel(path: str) -> None:
 
 
 def run_validation(template_path: str, dec_source_path: str, output_diff_path: str) -> list:
-    throwaway_path = template_path.replace(".xlsx", "_validation_copy.xlsx")
-    _populate_throwaway_copy(template_path, dec_source_path, throwaway_path)
-    _recalculate_with_excel(throwaway_path)
-    _recalculate_with_excel(dec_source_path)  # ensure Dec's own cache is also current
+    # Global Constraints forbid writing into the live source file, so Dec is never
+    # opened in-place by Excel here — it is only ever read by openpyxl (read-only),
+    # and a separate throwaway copy of Dec itself is what gets recalculated.
+    template_throwaway_path = template_path.replace(".xlsx", "_validation_copy.xlsx")
+    dec_throwaway_path = dec_source_path.replace(".xlsx", "_dec_validation_copy.xlsx")
+    shutil.copy(dec_source_path, dec_throwaway_path)
 
-    template_wb = openpyxl.load_workbook(throwaway_path, data_only=True)
-    dec_wb = openpyxl.load_workbook(dec_source_path, data_only=True)
+    _populate_throwaway_copy(template_path, dec_source_path, template_throwaway_path)
+    _recalculate_with_excel(template_throwaway_path)
+    _recalculate_with_excel(dec_throwaway_path)  # recalculate the COPY, never the original
+
+    template_wb = openpyxl.load_workbook(template_throwaway_path, data_only=True)
+    dec_wb = openpyxl.load_workbook(dec_throwaway_path, data_only=True)
     template_pm = template_wb["Position Model"]
     dec_pm = dec_wb["Position Model"]
 
@@ -1432,9 +1440,9 @@ Expected: PASS with 0 mismatches. If it fails, open `scripts/_validation_diff.cs
 
 - [ ] **Step 5: Save checkpoint**
 
-- [ ] **Step 6: Confirm the live December workbook was never modified**
+- [ ] **Step 6: Confirm the live December workbook's file modification time is unchanged**
 
-Run: `py -c "import openpyxl; wb=openpyxl.load_workbook(r'Johansen_FM_BOHO_D4_Strategy.xlsx', data_only=True); print(wb['Position Model']['A3'].value, wb['Position Model']['I3'].value)"` and confirm these values are unchanged from what was observed at the start of this project (the source file may have been recalculated in-place by Step 3's `_recalculate_with_excel` call on `dec_source_path` — if so, restore it from a fresh, untouched copy before treating this task as complete, since Global Constraints forbid writing into the live source file).
+Run (before and after Steps 1-4, comparing the two): `py -c "import os; print(os.path.getmtime(r'Johansen_FM_BOHO_D4_Strategy.xlsx'))"`. The timestamp must be identical before and after this task, since `run_validation` only ever opens the source file via `openpyxl.load_workbook(..., data_only=True)` (read-only) and copies it with `shutil.copy` before any Excel COM recalculation touches a copy. If the timestamp changed, stop and report BLOCKED — it means a step wrote to the source path directly, which contradicts this plan's Global Constraints and must be fixed before the task is considered complete.
 
 ---
 
