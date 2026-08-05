@@ -1,0 +1,8 @@
+*.xlsx
+*.xls
+*.xlsm
+~$*
+.superpowers/
+scripts/tests/_validation_diff.csv
+__pycache__/
+*.pyc
