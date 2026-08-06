@@ -3,10 +3,13 @@ import datetime
 import shutil
 import openpyxl
 import win32com.client
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.datetime import to_excel
 from config_map import CONFIG_LAYOUT
-from build_position_model import PARAM_BLOCK_COLS, DECOMMISSIONED_PER_YEAR_COLS, YEAR_BREAKDOWN_COLS
+from build_position_model import (
+    PARAM_BLOCK_COLS, DECOMMISSIONED_PER_YEAR_COLS, YEAR_BREAKDOWN_COLS,
+    GENERALIZED_TRAILING_WINDOW_ACCUM_COLS,
+)
 
 # Dec's live Config-equivalent values, read from the same cells Task 4's
 # CONSTANT_MAP was built from, used to populate the throwaway template copy
@@ -43,20 +46,40 @@ DEC_LIVE_VALUES = {
 #
 #   - PARAM_BLOCK_COLS: static one-off calibration/summary cells (a side
 #     panel, not per-day data) -- literally copied from Dec, so they'd trivially
-#     match, but comparing them row-for-row provides no real validation signal.
+#     match, but comparing them row-for-row provides no real validation signal
+#     via this per-(day-)row harness. targeted-fix-round-2, finding 4: this
+#     is exactly where the original CRITICAL 3 leak (and finding 2's dangling
+#     CQ-CU references) actually lived -- excluded from THIS row-for-row check
+#     but NOT left entirely unchecked, see param_block_value_parity_mismatches()
+#     below, which value-compares these columns within Dec's real populated
+#     extent instead.
 #   - DECOMMISSIONED_PER_YEAR_COLS (CE-CJ / CQ-CU): Dec has real hardcoded
 #     per-year data here; the template deliberately clears these columns
 #     entirely (MAJOR 4) since the same numbers now live in the dynamic
 #     year-breakdown table instead. A byte-for-byte compare would always
 #     "mismatch" by design -- that is the intended behavior, not a defect.
-#   - YEAR_BREAKDOWN_COLS (DZ-EF): the dynamic year-breakdown table. It is a
+#   - YEAR_BREAKDOWN_COLS (DZ-EI): the dynamic year-breakdown table. It is a
 #     small per-YEAR summary table, not a per-DAY time series, and its row
 #     layout does not correspond 1:1 with Dec's row-3-only original design, so
 #     comparing it via this per-(day-)row harness is structurally meaningless.
+#   - GENERALIZED_TRAILING_WINDOW_ACCUM_COLS (BZ/CA/CB/CC, "24-26 Cumulative
+#     PnL"/etc.): targeted-fix-round-2, finding 1. These four are now
+#     deliberately redefined as ordinary since-inception accumulators
+#     (identical to BV/BW/BX/BY) instead of Dec's row-740-anchored trailing
+#     window -- Dec's own real values here describe a concept (a specific
+#     "last ~2-3 calendar years" boundary) that no longer exists in the
+#     template by design, so a row-for-row compare against Dec's real BZ-CC
+#     values would always "mismatch", not because of a defect but because
+#     the column's very definition changed on purpose.
 #
 # Any column not in this exclusion set -- including every accumulator/
 # drawdown column CRITICAL 1 fixed -- is compared at every row.
-EXCLUDED_COMPARE_COLUMNS = set(PARAM_BLOCK_COLS) | set(DECOMMISSIONED_PER_YEAR_COLS) | set(YEAR_BREAKDOWN_COLS)
+EXCLUDED_COMPARE_COLUMNS = (
+    set(PARAM_BLOCK_COLS)
+    | set(DECOMMISSIONED_PER_YEAR_COLS)
+    | set(YEAR_BREAKDOWN_COLS)
+    | set(GENERALIZED_TRAILING_WINDOW_ACCUM_COLS)
+)
 
 # Excel error-value sentinels, as returned by openpyxl when a workbook is
 # loaded with data_only=True and the cell's cached value is an error.
@@ -91,6 +114,52 @@ def compare_columns_for(max_col: int) -> list:
         for c in range(1, max_col + 1)
         if get_column_letter(c) not in EXCLUDED_COMPARE_COLUMNS
     ]
+
+
+def param_block_value_parity_mismatches(dec_pm, template_pm) -> list:
+    """targeted-fix-round-2, finding 4: PARAM_BLOCK_COLS is excluded from
+    compare_columns_for's per-day row-for-row comparison, correctly -- these
+    are a static side panel, not per-day data, and extending a per-row
+    comparison into their mostly-blank padding region would be meaningless.
+    But "excluded from THAT comparison" had drifted into "excluded from all
+    verification whatsoever" -- this is exactly where the original CRITICAL 3
+    leak, and finding 2's dangling CQ-CU references, actually lived:
+    invisible to the harness purely because these columns were opted out of
+    value comparison entirely, not merely extent-checked.
+
+    This is a genuine, additive value-parity check: for every PARAM_BLOCK_COLS
+    column, at every row where DEC'S OWN real source has a non-blank value
+    (i.e. within Dec's real populated extent for that specific column --
+    never extending the comparison into the blank padding region the
+    template intentionally leaves different), compare Dec's real
+    recalculated value against the template's value at the same cell.
+    Returns mismatches in the same shape as run_validation's main list,
+    tagged "kind": "param_block_value_parity" so they're distinguishable.
+    """
+    mismatches = []
+    max_row = min(dec_pm.max_row, template_pm.max_row)
+    for col_letter in sorted(PARAM_BLOCK_COLS):
+        col_idx = column_index_from_string(col_letter)
+        if col_idx > dec_pm.max_column or col_idx > template_pm.max_column:
+            continue
+        for row in range(1, max_row + 1):
+            dec_raw = dec_pm.cell(row=row, column=col_idx).value
+            if dec_raw is None:
+                continue  # only Dec's real populated extent, never the padding region
+            dec_val = _normalize_for_compare(dec_raw)
+            tmpl_val = _normalize_for_compare(template_pm.cell(row=row, column=col_idx).value)
+            if isinstance(dec_val, (int, float)) and isinstance(tmpl_val, (int, float)):
+                if abs(dec_val - tmpl_val) > 1e-6:
+                    mismatches.append({
+                        "row": row, "col": col_letter, "dec": dec_val, "template": tmpl_val,
+                        "kind": "param_block_value_parity",
+                    })
+            elif dec_val != tmpl_val:
+                mismatches.append({
+                    "row": row, "col": col_letter, "dec": dec_val, "template": tmpl_val,
+                    "kind": "param_block_value_parity",
+                })
+    return mismatches
 
 
 def _populate_throwaway_copy(template_path: str, dec_source_path: str, throwaway_path: str) -> None:
@@ -204,6 +273,11 @@ def run_validation(template_path: str, dec_source_path: str, output_diff_path: s
                     mismatches.append({"row": row, "col": col, "dec": dec_val, "template": tmpl_val, "kind": "value"})
             elif dec_val != tmpl_val:
                 mismatches.append({"row": row, "col": col, "dec": dec_val, "template": tmpl_val, "kind": "value"})
+
+    # targeted-fix-round-2, finding 4: additive value-parity check over
+    # PARAM_BLOCK_COLS (excluded above from the per-day comparison, but not
+    # from all verification -- see param_block_value_parity_mismatches()).
+    mismatches.extend(param_block_value_parity_mismatches(dec_pm, template_pm))
 
     if mismatches:
         with open(output_diff_path, "w", newline="") as f:

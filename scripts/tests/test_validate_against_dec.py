@@ -2,6 +2,7 @@ import datetime
 import pathlib
 from validate_against_dec import (
     run_validation, compare_columns_for, EXCLUDED_COMPARE_COLUMNS, _is_excel_error, _normalize_for_compare,
+    param_block_value_parity_mismatches,
 )
 
 SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").read_text().strip()
@@ -49,7 +50,98 @@ SCATTERED_DEC_TEXT_QUIRK_CELLS = {
     (8, "BP"),
     (10, "BN"), (12, "BN"), (14, "BN"), (16, "BN"),
     (18, "BT"),
+    # targeted-fix-round-2, finding 4: Position Model!DK7 in Dec's own live
+    # file holds the literal TEXT "=ROUNDUP( SBO / Hedge Ratio, 0)" -- a
+    # human-written note/placeholder that LOOKS like a formula but is stored
+    # as Text (Dec's own cell format), so it is never evaluated in Dec's
+    # real recalculation; openpyxl reads back the literal string. The
+    # template's freshly-created DK7 has no such stray Text format, so the
+    # (identical) text IS evaluated as a real formula -- but "SBO"/"Hedge
+    # Ratio" aren't real cell references or defined names anywhere, so it
+    # resolves to #NAME?. Same category as the cells above (a Dec-side
+    # data-entry artifact, invisible until finding 4's new PARAM_BLOCK_COLS
+    # value-parity check started actually comparing these cells at all) --
+    # not a template defect, nothing to "fix" without reintroducing Dec's
+    # own mistake.
+    (7, "DK"),
 }
+
+# targeted-fix-round-2, finding 4: two more categories of PARAM_BLOCK_COLS
+# mismatch discovered once param_block_value_parity_mismatches() started
+# actually comparing these cells for the first time (previously wholly
+# unverified). Both trace to root causes that already exist elsewhere in
+# this file, just manifesting in a param-block SUMMARY cell instead of a
+# per-day cell:
+
+# (a) Dec's real DG49/DH49 described a "24-26 window"-specific max
+# drawdown/peak equity (see build_position_model.py's
+# _apply_targeted_fix_round_2_overrides docstring) computed from BZ/CA/CB/CC,
+# which finding 1 deliberately redefines to an ordinary since-inception
+# accumulator (same reasoning, and same EXCLUDED_COMPARE_COLUMNS exclusion,
+# as BZ/CA/CB/CC themselves). DG49/DH49 now correctly compute the genuine
+# ALL-TIME max drawdown/peak equity instead -- a different, equally valid,
+# number than Dec's narrower-window one, by design, not a defect.
+PARAM_BLOCK_STRUCTURALLY_REDEFINED_CELLS = {(49, "DG"), (49, "DH")}
+
+# (b) Dec's real DE46/DF2-DF49(subset)/DG48/DH44/DH48 are MAX/MIN/AVERAGE/
+# SUM/STDEV aggregates over a fixed row range (e.g. '=SUM($BR$21:$BR$1386)',
+# '=MIN($BY$20:$BY$740)') that happens to include the strategy's ~20-row
+# warm-up window (rows ~20-24) -- exactly the same already-documented root
+# cause as KNOWN_ACCEPTED_MISMATCH_ROWS (Dec's own literal-0 O19:P21 patch
+# vs. the template's real general formula, which naturally errors during
+# warm-up). A per-day cell only inherits this for a few rows near the
+# warm-up window itself (already covered by KNOWN_ACCEPTED_MISMATCH_ROWS);
+# these param-block cells inherit it for their ENTIRE aggregate, because
+# MAX/MIN/AVERAGE/SUM/STDEV over a range containing even one error cell
+# propagates that error to the whole result. Confirmed by direct inspection
+# of the recalculated template: AY/BD/BI/BK/CK (feeding DF2-DF17) and BT
+# (feeding DF33/DF39/DF48) are #N/A/#DIV/0! at rows 20-24 ONLY, exactly the
+# warm-up window, and clean everywhere else. Same root cause, no new defect
+# -- fixing it would mean redesigning these aggregate ranges to skip the
+# warm-up window, out of scope for this targeted fix round (not one of its
+# 5 named findings).
+PARAM_BLOCK_WARMUP_INHERITED_ERROR_CELLS = {
+    (46, "DE"),
+    (2, "DF"), (3, "DF"), (4, "DF"), (5, "DF"), (6, "DF"),
+    (8, "DF"), (9, "DF"), (10, "DF"), (11, "DF"),
+    (14, "DF"), (15, "DF"), (16, "DF"), (17, "DF"),
+    (33, "DF"), (39, "DF"), (48, "DF"),
+    (48, "DG"),
+    (44, "DH"), (48, "DH"),
+}
+
+# A third, unrelated, documented exception, introduced by targeted-fix-round-2
+# finding 2's param_block_value_parity_mismatches() check (finding 4): Dec's
+# own real DJ224:DN227 hold real MAX/MIN-over-CQ-CU numbers (e.g. Dec's real
+# DK224≈253122, DK225≈-623899), but the template deliberately clears these
+# specific 15 cells to blank (see build_position_model.py's
+# _apply_targeted_fix_round_2_overrides) rather than reproduce the
+# now-decommissioned CQ-CU dangling reference in a new shape. This is an
+# intentional design choice (the genuine general equivalent, EG/EH/EI, lives
+# in the dynamic year-breakdown table instead), not a defect -- see
+# build_position_model.py's DJ224:DN227-clearing comment for the reasoning.
+PARAM_BLOCK_INTENTIONALLY_CLEARED_CELLS = {
+    (row, col)
+    for row in (224, 225, 227)
+    for col in ("DJ", "DK", "DL", "DM", "DN")
+}
+
+# targeted-fix-round-2, finding 3: the row-window exception above (~630
+# possible cells across 10 rows x nearly every compared column) previously
+# had no count assertion -- it blanket-exempted every mismatch landing in
+# that window with no bound, so a future regression landing in the same rows
+# (or the count silently growing) would pass silently. This pins the actual
+# count of mismatches absorbed by ALL THREE accepted exceptions combined
+# (row-window + scattered-text-quirk + intentionally-cleared-cells), the same
+# rigor SCATTERED_DEC_TEXT_QUIRK_CELLS already applies via its exact
+# (row, col) enumeration. Re-diagnosed against the post-targeted-fix-round-2
+# widened harness (compare_columns_for now also covers ~137 columns instead
+# of ~97, since PARAM_BLOCK_COLS's row-for-row exclusion is unchanged, but
+# param_block_value_parity_mismatches() is a wholly new, additive check) --
+# see targeted-fix-round-2-report.md for the exact count and how it was
+# obtained. If this number changes, investigate why before updating it; do
+# not just bump it to make the test pass.
+EXPECTED_ACCEPTED_MISMATCH_COUNT = 414  # from the real COM validation run, see targeted-fix-round-2-report.md
 
 
 def test_compare_columns_now_covers_far_more_than_the_old_narrow_7():
@@ -73,9 +165,50 @@ def test_compare_columns_excludes_documented_non_comparable_columns():
     # own docstring/comment in validate_against_dec.py) -- structurally not
     # per-day time series, so a row-for-row compare against them is meaningless.
     cols = compare_columns_for(137)
-    for col in ("DK", "DV", "DW", "CQ", "CE", "DZ", "EA", "EE"):
+    for col in ("DK", "DV", "DW", "CQ", "CE", "DZ", "EA", "EE", "EG"):
         assert col not in cols
         assert col in EXCLUDED_COMPARE_COLUMNS
+    # targeted-fix-round-2, finding 1: BZ/CA/CB/CC are now deliberately
+    # redefined (since-inception, not Dec's row-740 trailing window) and
+    # excluded for the same "structurally not comparable" reason.
+    for col in ("BZ", "CA", "CB", "CC"):
+        assert col not in cols
+        assert col in EXCLUDED_COMPARE_COLUMNS
+
+
+def test_param_block_value_parity_flags_within_dec_extent_only():
+    # targeted-fix-round-2, finding 4: PARAM_BLOCK_COLS is excluded from the
+    # per-day row-for-row comparison above, but must not be excluded from ALL
+    # verification -- this unit test exercises param_block_value_parity_
+    # mismatches() directly (no COM/Excel recalculation needed) against two
+    # small synthetic worksheets standing in for dec_pm/template_pm.
+    import openpyxl
+    from openpyxl.utils import column_index_from_string
+
+    dec_wb = openpyxl.Workbook()
+    dec_ws = dec_wb.active
+    tmpl_wb = openpyxl.Workbook()
+    tmpl_ws = tmpl_wb.active
+    dd_col = column_index_from_string("DD")
+
+    dec_ws.cell(row=1, column=dd_col, value=42)
+    tmpl_ws.cell(row=1, column=dd_col, value=42)  # matches -- not flagged
+
+    dec_ws.cell(row=2, column=dd_col, value=99)
+    tmpl_ws.cell(row=2, column=dd_col, value=0)  # genuine mismatch -- flagged
+
+    # Row 3: Dec's own source is blank here (outside Dec's real populated
+    # extent for this column) -- whatever the template holds must NOT be
+    # flagged, even though it's non-blank (this is exactly the padding/blank
+    # region the check must never extend the comparison into).
+    tmpl_ws.cell(row=3, column=dd_col, value=123)
+
+    mismatches = param_block_value_parity_mismatches(dec_ws, tmpl_ws)
+    assert {
+        "row": 2, "col": "DD", "dec": 99, "template": 0, "kind": "param_block_value_parity",
+    } in mismatches
+    assert all(m["row"] != 1 for m in mismatches)
+    assert all(m["row"] != 3 for m in mismatches)
 
 
 def test_is_excel_error_detects_error_sentinels_not_plain_values():
@@ -106,9 +239,23 @@ def test_validation_reports_no_mismatches_on_dec_replay():
         dec_source_path=SOURCE_PATH,
         output_diff_path=str(pathlib.Path(__file__).parent / "_validation_diff.csv"),
     )
-    unexplained = [
+    accepted = [
         m for m in mismatches
-        if m["row"] not in KNOWN_ACCEPTED_MISMATCH_ROWS
-        and (m["row"], m["col"]) not in SCATTERED_DEC_TEXT_QUIRK_CELLS
+        if m["row"] in KNOWN_ACCEPTED_MISMATCH_ROWS
+        or (m["row"], m["col"]) in SCATTERED_DEC_TEXT_QUIRK_CELLS
+        or (m["row"], m["col"]) in PARAM_BLOCK_INTENTIONALLY_CLEARED_CELLS
+        or (m["row"], m["col"]) in PARAM_BLOCK_STRUCTURALLY_REDEFINED_CELLS
+        or (m["row"], m["col"]) in PARAM_BLOCK_WARMUP_INHERITED_ERROR_CELLS
     ]
+    unexplained = [m for m in mismatches if m not in accepted]
     assert unexplained == [], f"{len(unexplained)} unexplained mismatches, see _validation_diff.csv"
+    # targeted-fix-round-2, finding 3: the row-window exception has no count
+    # bound of its own -- pin the TOTAL number of mismatches all three
+    # accepted exceptions combined actually absorb, so a regression landing
+    # in one of these windows (or the count silently growing) fails loudly
+    # instead of being silently absorbed forever.
+    assert len(accepted) == EXPECTED_ACCEPTED_MISMATCH_COUNT, (
+        f"accepted-exception count changed: {len(accepted)} actual vs "
+        f"{EXPECTED_ACCEPTED_MISMATCH_COUNT} expected -- investigate before "
+        "updating this number, see targeted-fix-round-2-report.md"
+    )
