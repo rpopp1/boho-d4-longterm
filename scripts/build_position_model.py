@@ -1,3 +1,5 @@
+import re
+
 import openpyxl
 from openpyxl.utils import column_index_from_string, get_column_letter
 
@@ -88,7 +90,25 @@ PARAM_BLOCK_COLS = {
 
 # Columns holding the Dec-specific hardcoded per-year breakdown table that
 # _write_dynamic_year_breakdown replaces. See the NOTE above.
-YEAR_BREAKDOWN_COLS = ("DZ", "EA", "EB", "EC", "ED")
+YEAR_BREAKDOWN_COLS = ("DZ", "EA", "EB", "EC", "ED", "EE", "EF")
+
+# CRITICAL 1: self-referencing accumulator/drawdown columns (e.g.
+# Y{row} = Y{row-1}+X{row}). During the strategy's ~20-row warm-up window the
+# per-row contribution (X, etc.) is naturally #N/A/#DIV/0! (not enough history
+# yet for the rolling z-score). Dec's live file has a literal hardcoded 0 at
+# specific warm-up rows (e.g. Y20) that breaks the #N/A chain once; the
+# general formula this template writes everywhere has no such literal, so an
+# error in the per-row contribution would otherwise propagate through the
+# self-reference forever. Wrapping the self-reference in IFERROR(prev,0) makes
+# the running total self-heal as soon as the per-row contribution is a real
+# number again, matching Dec's own literal-0 patch behavior without hardcoding
+# any Dec-specific row numbers.
+#
+# CM (=CK{row}-CL{row}) and BX (=BV{row}-BW{row}) are deliberately excluded:
+# they are not self-referencing accumulators, they derive directly from other
+# columns in the same row, so once CK/CL/BV/BW are hardened here they resolve
+# correctly with no wrap of their own.
+ACCUM_SELF_REF_COLS = ("Y", "AZ", "BE", "BJ", "CK", "CL", "CN", "BV", "BW", "BY")
 
 
 def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_col: int = None) -> None:
@@ -175,7 +195,33 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
     finally:
         source_wb.close()
 
+    _wrap_accumulator_self_references(ws, last_target_row)
     _write_dynamic_year_breakdown(ws, last_target_row)
+
+
+def _wrap_accumulator_self_references(ws, last_target_row: int) -> None:
+    """CRITICAL 1 fix: for each column in ACCUM_SELF_REF_COLS, wrap the
+    self-reference to the immediately preceding row (e.g. the "Y2" in
+    "=Y2+X3") in IFERROR(...,0). Applied as a post-processing pass over
+    whatever formula text is already sitting in each cell (written by the
+    baseline fill_sheet_from_pattern pass for ROW3_OK columns, or by the
+    BOOT_END steady-state shift for BOOTSTRAP columns), so it transparently
+    covers both categories without needing to know which one a given column
+    is in.
+    """
+    for col_letter in ACCUM_SELF_REF_COLS:
+        col_idx = column_index_from_string(col_letter)
+        if col_idx > ws.max_column:
+            continue
+        for row in range(3, last_target_row + 1):
+            cell = ws.cell(row=row, column=col_idx)
+            value = cell.value
+            if not (isinstance(value, str) and value.startswith("=")):
+                continue
+            prev_row = row - 1
+            pattern = re.compile(rf"(?<![A-Za-z0-9$]){re.escape(col_letter)}{prev_row}(?![A-Za-z0-9])")
+            if pattern.search(value):
+                cell.value = pattern.sub(f"IFERROR({col_letter}{prev_row},0)", value, count=1)
 
 
 def _write_dynamic_year_breakdown(ws, last_target_row: int = 3001) -> None:

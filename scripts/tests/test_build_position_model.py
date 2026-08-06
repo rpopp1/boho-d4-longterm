@@ -98,3 +98,65 @@ def test_bootstrap_columns_reach_steady_state_row_shift():
     assert bc21 is not None
     assert "$T20" in bc21
     assert "$AF21" in bc21
+
+
+def test_accumulator_self_references_are_iferror_wrapped():
+    # CRITICAL 1: Y/AZ/BE/BJ/CK/CL/CN/BV/BW/BY are self-referencing accumulators
+    # (e.g. Y{row} = Y{row-1}+X{row}). Dec's live file has a literal hardcoded 0
+    # at specific warm-up rows (e.g. Y20) that breaks the #N/A chain once, but the
+    # template writes the general formula everywhere, so any #N/A/#DIV/0! in a
+    # per-row contribution propagates through the accumulator forever. Each
+    # self-reference to the previous row must be wrapped in IFERROR(...,0) so the
+    # running total self-heals once real numbers exist again.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
+    ws = wb["Position Model"]
+
+    y3 = ws["Y3"].value
+    assert y3 == "=IFERROR(Y2,0)+X3"
+
+    az3 = ws["AZ3"].value
+    assert az3 == "=IFERROR(AZ2,0)+AY3"
+
+    be3 = ws["BE3"].value
+    assert be3 == "=IFERROR(BE2,0)+BD3"
+
+    bj3 = ws["BJ3"].value
+    assert bj3 == "=IFERROR(BJ2,0)+BI3"
+
+    ck3 = ws["CK3"].value
+    assert ck3 == "=IFERROR(CK2,0)+BK3"
+
+    cl3 = ws["CL3"].value
+    assert cl3 == "=MAX(IFERROR(CL2,0),CK3)"
+
+    cn3 = ws["CN3"].value
+    assert cn3 == "=MIN(IFERROR(CN2,0),CM3)"
+
+    # BV/BW/BY are BOOTSTRAP columns; their real per-day steady formula only
+    # begins at row 21 in the live workbook.
+    bv21 = ws["BV21"].value
+    assert bv21 == "=IFERROR(BV20,0)+BT21"
+
+    bw21 = ws["BW21"].value
+    assert bw21 == "=MAX(BV21,IFERROR(BW20,0))"
+
+    by21 = ws["BY21"].value
+    assert by21 == "=MIN(BX21,IFERROR(BY20,0))"
+
+    # A later row must also stay wrapped, and reference its own immediate
+    # predecessor (not the row-3/row-21 boundary), so a mid-strategy #N/A
+    # doesn't propagate past that one row either.
+    y25 = ws["Y25"].value
+    assert y25 == "=IFERROR(Y24,0)+X25"
+
+
+def test_non_self_referencing_drawdown_columns_are_untouched():
+    # CM (=CK{row}-CL{row}) and BX (=BV{row}-BW{row}) are not self-referencing
+    # accumulators -- they derive directly from other (now error-hardened)
+    # columns, so they need no IFERROR wrap of their own.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
+    ws = wb["Position Model"]
+    assert ws["CM3"].value == "=CK3-CL3"
+    assert ws["BX21"].value == "=BV21-BW21"
