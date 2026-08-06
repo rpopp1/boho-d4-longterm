@@ -41,3 +41,15 @@ def write_johansen_sheet(wb, source_path: str) -> None:
         for cell in row:
             if cell.value is not None:
                 ws[cell.coordinate] = cell.value
+
+
+def write_results_sheet(wb, source_path: str) -> None:
+    if "Results" in wb.sheetnames:
+        del wb["Results"]
+    ws = wb.create_sheet("Results")
+    source_wb = openpyxl.load_workbook(source_path, data_only=False)
+    src = source_wb["Results"]
+    for row in src.iter_rows(min_row=1, max_row=11, max_col=2):
+        for cell in row:
+            if cell.value is not None:
+                ws[cell.coordinate] = cell.value

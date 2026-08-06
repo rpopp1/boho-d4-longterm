@@ -1,5 +1,5 @@
 import openpyxl, pathlib
-from build_matrices_johansen import write_matrices_sheet, write_johansen_sheet
+from build_matrices_johansen import write_matrices_sheet, write_johansen_sheet, write_results_sheet
 
 SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").read_text().strip()
 
@@ -25,3 +25,10 @@ def test_johansen_sheet_replicated():
     ws = wb["Johansen"]
     assert ws["B3"].value == "=Matrices!C50"
     assert ws["B8"].value == '=IF(OR(B3="",B6=""),"",B3+B6)'
+
+def test_results_sheet_replicated():
+    wb = openpyxl.Workbook()
+    write_results_sheet(wb, SOURCE_PATH)
+    ws = wb["Results"]
+    assert ws["A2"].value == "Effective T (Δ observations)"
+    assert ws["B4"].value == "=Johansen!B12"
