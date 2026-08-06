@@ -22,6 +22,29 @@ def test_build_template_data_sheet_has_no_price_values():
         assert wb["Data"]["B2"].value is None
         assert wb["Data"]["C2"].value is None
 
+def test_build_template_has_no_array_formula_cells_anywhere():
+    # MINOR 6: 5 ArrayFormula cells (Matrices!H7, Position Model!DC22/DE43/
+    # DF43/DF46) slipped through the plain iter_rows-based literal-copy loops
+    # in build_matrices_johansen.py and build_position_model.py, which had no
+    # NotImplementedError guard for dynamic-array/spill formulas the way
+    # sheet_cloner.fill_sheet_from_pattern does. All were verified to be
+    # single-cell (legacy CSE) array formulas, safe to write as plain formula
+    # strings. Guard against any regression across the whole built template.
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "test_template.xlsx")
+        build_template(SOURCE_PATH, out, num_rows=50)
+        wb = openpyxl.load_workbook(out, data_only=False)
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows():
+                for cell in row:
+                    assert not isinstance(cell.value, ArrayFormula), (
+                        f"{sheet_name}!{cell.coordinate} is an ArrayFormula"
+                    )
+
+
 def test_build_template_no_leftover_dec_absolute_constants():
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "test_template.xlsx")

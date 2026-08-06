@@ -1,5 +1,5 @@
 import openpyxl
-from formula_tools import extract_row_formulas, rewrite_constants
+from formula_tools import extract_row_formulas, rewrite_constants, unwrap_scalar_array_formula
 from config_map import CONSTANT_MAP, MATRICES_ONLY_CONSTANT_MAP
 
 
@@ -13,7 +13,14 @@ def write_matrices_sheet(wb, source_path: str) -> None:
         for cell in row:
             if cell.value is None:
                 continue
-            ws[cell.coordinate] = cell.value
+            # MINOR 6: this plain iter_rows-based copy has no dynamic-array/
+            # spill handling (unlike sheet_cloner.fill_sheet_from_pattern's
+            # explicit NotImplementedError guard) -- Matrices!H7 is a live
+            # ArrayFormula (a legacy CSE array formula, not a true spill;
+            # verified its ref is just its own single-cell coordinate) that
+            # would otherwise be written into the new sheet as an
+            # ArrayFormula object rather than a plain formula string.
+            ws[cell.coordinate] = unwrap_scalar_array_formula(cell.value, cell.coordinate)
     # Structural template-specific overrides:
     # Task 4's reconciled config_map.py confirmed the real window-length cell is
     # B3 (label "Window Length (rows)" sits at A3), not C3 — C3 is empty in the
@@ -40,7 +47,7 @@ def write_johansen_sheet(wb, source_path: str) -> None:
     for row in src.iter_rows(min_row=1, max_row=26, max_col=6):
         for cell in row:
             if cell.value is not None:
-                ws[cell.coordinate] = cell.value
+                ws[cell.coordinate] = unwrap_scalar_array_formula(cell.value, cell.coordinate)
 
 
 def write_results_sheet(wb, source_path: str) -> None:
@@ -52,4 +59,4 @@ def write_results_sheet(wb, source_path: str) -> None:
     for row in src.iter_rows(min_row=1, max_row=11, max_col=2):
         for cell in row:
             if cell.value is not None:
-                ws[cell.coordinate] = cell.value
+                ws[cell.coordinate] = unwrap_scalar_array_formula(cell.value, cell.coordinate)

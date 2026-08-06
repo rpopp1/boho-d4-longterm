@@ -5,7 +5,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 
 from sheet_cloner import fill_sheet_from_pattern
 from config_map import CONSTANT_MAP
-from formula_tools import extract_row_formulas, rewrite_constants, shift_formula_rows
+from formula_tools import extract_row_formulas, rewrite_constants, shift_formula_rows, unwrap_scalar_array_formula
 
 # ---------------------------------------------------------------------------
 # Independent verification (see task-12-report.md for full methodology and
@@ -185,13 +185,24 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
                 continue
             literal_end = min(boot_end - 1, last_target_row, src.max_row)
             for row in range(3, literal_end + 1):
-                value = src.cell(row=row, column=col_idx).value
+                cell = src.cell(row=row, column=col_idx)
+                # MINOR 6: this literal-copy loop has no dynamic-array/spill
+                # handling of its own -- unwrap any single-cell (legacy CSE)
+                # ArrayFormula to plain formula text before it can be written
+                # into the new sheet as an ArrayFormula object.
+                value = unwrap_scalar_array_formula(cell.value, cell.coordinate)
                 if isinstance(value, str) and value.startswith("="):
                     value = rewrite_constants(value, CONSTANT_MAP)
                 ws.cell(row=row, column=col_idx, value=value)
 
             if boot_end <= last_target_row:
-                pattern_value = src.cell(row=boot_end, column=col_idx).value
+                pattern_cell = src.cell(row=boot_end, column=col_idx)
+                # Same ArrayFormula unwrap as above -- this specific spot is
+                # where Position Model!DC22 leaked in practice: DC's boot_end
+                # row was an ArrayFormula, so `isinstance(pattern_value, str)`
+                # was False and it fell into the else branch below, which
+                # wrote the raw ArrayFormula object at boot_end only.
+                pattern_value = unwrap_scalar_array_formula(pattern_cell.value, pattern_cell.coordinate)
                 if isinstance(pattern_value, str) and pattern_value.startswith("="):
                     for row in range(boot_end, last_target_row + 1):
                         delta = row - boot_end
@@ -219,7 +230,12 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
             if col_idx > max_col:
                 continue
             for row in range(3, last_target_row + 1):
-                value = src.cell(row=row, column=col_idx).value
+                cell = src.cell(row=row, column=col_idx)
+                # MINOR 6: unwrap any single-cell ArrayFormula before writing
+                # (this is where Position Model!DE43/DF43/DF46 leaked in
+                # practice -- all three are legacy CSE array formulas stored
+                # in DE/DF, both PARAM_BLOCK_COLS columns).
+                value = unwrap_scalar_array_formula(cell.value, cell.coordinate)
                 if isinstance(value, str) and value.startswith("="):
                     value = rewrite_constants(value, CONSTANT_MAP)
                 ws.cell(row=row, column=col_idx).value = value
