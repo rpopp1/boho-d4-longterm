@@ -10,6 +10,15 @@ def test_matrices_window_length_uses_config_name():
     assert ws["B3"].value == "=JohansenWindowLen"
     assert ws["B2"].value == "=Johansen_Monthly!$K$3"
 
+def test_matrices_b4_formula_rewritten_via_merged_map():
+    wb = openpyxl.Workbook()
+    write_matrices_sheet(wb, SOURCE_PATH)
+    ws = wb["Matrices"]
+    b4 = ws["B4"].value
+    assert "$B$3" not in b4
+    assert "JohansenWindowLen" in b4
+    assert b4 == "=MAX(3,$B$2-JohansenWindowLen+1)"
+
 def test_johansen_sheet_replicated():
     wb = openpyxl.Workbook()
     write_johansen_sheet(wb, SOURCE_PATH)
