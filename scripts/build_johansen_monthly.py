@@ -69,4 +69,14 @@ def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> 
     # now manually maintained rather than auto-computed, which makes this
     # formula MORE robust, not less — no dependency on Excel's dynamic-array
     # file format at all.
-    ws["K3"] = '=LOOKUP(2,1/(F:F<>""),F:F)'
+    #
+    # MAJOR 5 fix: scoped to F3:F<capacity> rather than the whole F:F column.
+    # A whole-column LOOKUP(2,1/(F:F<>""),F:F) matches ANY non-blank cell in
+    # F, including F2's own header text "EndRow" -- so on a freshly-built
+    # book, before anyone has appended a real log row, K3 would return the
+    # literal string "EndRow" instead of a genuine empty/error state. Row 3
+    # is the log's first real data row (F2 is the header), and the sheet's
+    # own row capacity (num_rows, matching every other engine sheet) is the
+    # natural upper bound.
+    last_log_row = num_rows + 1
+    ws["K3"] = f'=LOOKUP(2,1/(F3:F{last_log_row}<>""),F3:F{last_log_row})'

@@ -10,8 +10,21 @@ def test_active_end_row_is_dynamic_not_hardcoded():
     formula = ws["K3"].value
     assert formula != "=F69"
     assert "LOOKUP(2,1/(" in formula
-    assert "F:F" in formula  # resolves against the log table's own F column
+    assert "F3:F11" in formula  # resolves against the log table's own F column, scoped to real row capacity
     assert ws["K2"].value == "Active End Row"  # label sits at K2, not K1, per the live file
+
+
+def test_active_end_row_does_not_match_the_header_row():
+    # MAJOR 5: a whole-column LOOKUP(2,1/(F:F<>""),F:F) matches F2's own
+    # header text "EndRow" when the log is otherwise empty, so K3 would
+    # return the literal string "EndRow" on a freshly-built book instead of a
+    # genuine empty/error state. The range must exclude row 2 (the header).
+    wb = openpyxl.Workbook()
+    write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Johansen_Monthly"]
+    formula = ws["K3"].value
+    assert not formula.startswith("=LOOKUP(2,1/(F:F")
+    assert "F2" not in formula
 
 def test_headers_present():
     wb = openpyxl.Workbook()
