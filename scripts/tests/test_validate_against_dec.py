@@ -1,5 +1,5 @@
 import pathlib
-from validate_against_dec import run_validation
+from validate_against_dec import run_validation, compare_columns_for, EXCLUDED_COMPARE_COLUMNS, _is_excel_error
 
 SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").read_text().strip()
 
@@ -16,6 +16,42 @@ SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").rea
 # compared columns; this is specific to Dec's January-2021 startup dates and
 # is not something a future month's book would need to replicate.
 KNOWN_ACCEPTED_MISMATCH_ROWS = range(19, 25)  # rows 19, 20, 21, 22, 23, 24
+
+
+def test_compare_columns_now_covers_far_more_than_the_old_narrow_7():
+    # CRITICAL 2: the old COMPARE_COLUMNS = ["I","L","S","T","U","V","X"] covered
+    # only 7 of ~137 Position Model columns, and none of them were self-referencing
+    # accumulators, so it could never have caught CRITICAL 1. The comparison must
+    # now be an opt-OUT list covering nearly every column.
+    cols = compare_columns_for(137)
+    assert len(cols) > 90
+    # The accumulator/drawdown columns CRITICAL 1 fixed must be covered.
+    for col in ("Y", "AZ", "BE", "BJ", "CK", "CL", "CM", "CN", "BV", "BW", "BX", "BY"):
+        assert col in cols
+    # The old narrow 7 must still be covered too.
+    for col in ("I", "L", "S", "T", "U", "V", "X"):
+        assert col in cols
+
+
+def test_compare_columns_excludes_documented_non_comparable_columns():
+    # PARAM_BLOCK_COLS, the decommissioned per-year columns, and the dynamic
+    # year-breakdown table are documented exclusions (see EXCLUDED_COMPARE_COLUMNS'
+    # own docstring/comment in validate_against_dec.py) -- structurally not
+    # per-day time series, so a row-for-row compare against them is meaningless.
+    cols = compare_columns_for(137)
+    for col in ("DK", "DV", "DW", "CQ", "CE", "DZ", "EA", "EE"):
+        assert col not in cols
+        assert col in EXCLUDED_COMPARE_COLUMNS
+
+
+def test_is_excel_error_detects_error_sentinels_not_plain_values():
+    assert _is_excel_error("#N/A")
+    assert _is_excel_error("#DIV/0!")
+    assert _is_excel_error("#REF!")
+    assert not _is_excel_error(0)
+    assert not _is_excel_error(None)
+    assert not _is_excel_error("Sell")
+    assert not _is_excel_error(1.5)
 
 
 def test_validation_reports_no_mismatches_on_dec_replay():
