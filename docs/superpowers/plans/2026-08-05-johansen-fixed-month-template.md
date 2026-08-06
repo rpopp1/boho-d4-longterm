@@ -1567,12 +1567,16 @@ DEC_LIVE_VALUES = {
     "SizingWeight_Tier2": 0.5,
     "SizingWeight_Tier3": 0.25,
     "EWMA_Lambda": 0.94,
-    "ShockMultiplierThresh": 1.25,
+    "ShockMultiplierThreshold": 1.25,
     "StopLossUSD_Base": -65000,
-    "RiskLevelScalar": 1.5,
+    "D4Multiplier": 1.5,
     "RiskLevelInput": 1,
     "ZLCentsPerLB": 60000,
 }
+# Field names above must match scripts/config_map.py's CONFIG_LAYOUT exactly
+# (reconciled against the live workbook in Task 4) — "ShockMultiplierThreshold"
+# and "D4Multiplier" are the corrected names; earlier drafts of this plan used
+# "ShockMultiplierThresh" and "RiskLevelScalar", which no longer exist.
 
 COMPARE_COLUMNS = ["I", "L", "S", "T", "U", "V", "X"]  # spread, z-score, positions 1-3, total, daily PnL
 
