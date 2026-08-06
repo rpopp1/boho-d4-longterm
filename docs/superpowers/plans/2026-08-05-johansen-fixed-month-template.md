@@ -613,6 +613,12 @@ def test_fill_does_not_duplicate_array_formula_spill_anchor():
     a2 = ws["A2"].value
     assert isinstance(a2, ArrayFormula)
     assert "FILTER(DiffLag!$B$2:$B$1048576" in a2.text
+    # ref MUST span more than one cell — a single-cell ref makes Excel treat this
+    # as a legacy CSE array formula (returns only the first value) instead of a
+    # real dynamic-array spill. This exact defect was caught by Task 15's Dec
+    # replay validation (silent #N/A cascade), so this assertion guards against
+    # regressing it.
+    assert a2.ref == "A2:A11"
     # Every other target row must be left untouched — writing the same spill
     # anchor into A3..A11 would corrupt the file with #SPILL! errors in Excel.
     for row in range(3, 12):
@@ -683,8 +689,19 @@ def fill_sheet_from_pattern(
             if col_letter in spill_cols:
                 if i == 0:
                     original = raw_array_formulas[col_letter]
+                    # The ref MUST span more than one cell, or Excel treats this as a
+                    # legacy CSE array formula scoped to a single cell (returning only
+                    # the top-left element) instead of a modern dynamic-array spill
+                    # that recalculates its own true extent — confirmed via Task 15's
+                    # validation, which caught this as a single-cell ref producing
+                    # #N/A everywhere downstream. The exact end row doesn't need to
+                    # match the eventual real data extent; Excel recomputes the true
+                    # spill size on full recalculation as long as ref is recognized
+                    # as a genuine multi-cell dynamic array to begin with.
+                    end_row = target_start_row + max(num_rows, 2) - 1
+                    ref = f"{col_letter}{target_start_row}:{col_letter}{end_row}"
                     target_ws[f"{col_letter}{target_start_row}"] = ArrayFormula(
-                        ref=f"{col_letter}{target_start_row}", text=original.text
+                        ref=ref, text=original.text
                     )
                 continue
             if isinstance(value, str) and value.startswith("="):
@@ -1085,6 +1102,11 @@ def test_spill_anchors_are_array_formulas_written_once():
         cell = ws[f"{col}2"].value
         assert isinstance(cell, ArrayFormula), f"{col}2 should be a spill anchor"
         assert "FILTER(" in cell.text
+        # ref must span more than one cell (see Task 7 Addendum's identical fix) —
+        # a single-cell ref is written as a legacy CSE array formula in the xlsx
+        # XML and Excel silently returns only its first value instead of spilling,
+        # which is exactly the defect Task 15's Dec-replay validation caught.
+        assert cell.ref == f"{col}2:{col}11", f"{col}2's ref should span multiple rows, got {cell.ref}"
         # Must not be duplicated into later rows.
         for row in range(3, 12):
             assert ws[f"{col}{row}"].value is None, f"{col}{row} should be empty"
@@ -1161,9 +1183,16 @@ def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> 
 
         # F2/G2: spill anchors (month-end log compaction), same treatment as
         # column A — preserve as real ArrayFormula objects, written once.
+        # ref must span more than one cell (see sheet_cloner.py's identical fix,
+        # Task 7 Addendum) or Excel treats it as a single-cell legacy CSE array
+        # formula instead of a real dynamic-array spill — this exact bug was
+        # caught by Task 15's Dec-replay validation (#N/A cascading through
+        # every downstream LOOKUP that depends on this log table).
         for col in ("F", "G"):
             cell = src[f"{col}2"]
-            ws[f"{col}2"] = ArrayFormula(ref=f"{col}2", text=cell.value.text)
+            end_row = 2 + max(num_rows, 2) - 1
+            ref = f"{col}2:{col}{end_row}"
+            ws[f"{col}2"] = ArrayFormula(ref=ref, text=cell.value.text)
     finally:
         source_wb.close()
 
