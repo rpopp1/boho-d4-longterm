@@ -64,6 +64,29 @@ def test_bootstrap_columns_use_literal_rows_before_steady_state():
     assert "$S1268" in bc3 or "$T1268" in bc3
 
 
+def test_year_breakdown_rows_beyond_3_have_no_leftover_dec_literals():
+    # Fix round 1: an earlier version put DZ/EA/EB/EC/ED in PARAM_BLOCK_COLS,
+    # which literally copied the Dec source's whole hardcoded per-year table
+    # (DZ4:DZ9 = literal years 2022-2026 + "Total"; EA4:EA8 = literal
+    # fixed-row-range COUNTs like '=COUNT($AH$250:$AH$494)') into the built
+    # sheet -- _write_dynamic_year_breakdown only overwrote rows 2-3, so rows
+    # 4-9 silently retained Dec-specific literals. Confirm none survive.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Position Model"]
+    for row in range(4, 10):
+        for col in ("DZ", "EA", "EB", "EC", "ED"):
+            v = ws[f"{col}{row}"].value
+            assert v is None
+    # And row 3 (row 2 header labels aside) must not contain any of the
+    # Dec-specific literal per-year row bounds either.
+    for col in ("EA", "EB", "EC"):
+        v = ws[f"{col}3"].value
+        assert "$AH$2:$AH$249" not in (v or "")
+        assert "$AJ$2:$AJ$249" not in (v or "")
+        assert "$AL$2:$AL$249" not in (v or "")
+
+
 def test_bootstrap_columns_reach_steady_state_row_shift():
     # From row 20 on, BC follows a genuine per-day relative pattern in the live
     # workbook: '=IF($T19=0,0,-$T19*$AF20*$DM$3)' at row 20, shifting by +1 row

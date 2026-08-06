@@ -52,6 +52,21 @@ from formula_tools import extract_row_formulas, rewrite_constants, shift_formula
 # true, indefinitely-shiftable steady-state pattern (verified by shifting
 # that row's formula and comparing -- exactly, whitespace-normalized -- to
 # every later populated row in the live workbook up to row 1386).
+#
+# NOTE (fix round 1): DZ/EA/EB/EC/ED are DELIBERATELY EXCLUDED from
+# PARAM_BLOCK_COLS below, even though the live source's parameter-block area
+# includes them. Those five columns hold the Dec-specific hardcoded per-year
+# breakdown table (DZ3:DZ9 = literal years 2021-2026 + "Total"; EA4:EA8 =
+# literal fixed-row-range COUNTs like "=COUNT($AH$250:$AH$494)" for 2022,
+# etc.) -- exactly the hardcoded-row-bound pattern this task must eliminate.
+# A first version of this file put them in PARAM_BLOCK_COLS, which literally
+# copied that whole stale table into the built sheet; _write_dynamic_year_
+# breakdown only overwrote rows 2-3 afterward, silently leaving rows 4-9 of
+# DZ/EA/EB/EC/ED as leftover Dec-specific literals. Excluding them here means
+# the baseline fill_sheet_from_pattern call (ROW3_OK default) writes into
+# them instead, and _write_dynamic_year_breakdown explicitly clears
+# rows 4..last_target_row after writing its dynamic row 3, so nothing
+# Dec-specific can survive in these five columns anywhere in the built sheet.
 # ---------------------------------------------------------------------------
 BOOT_END = {
     "J": 41, "K": 40, "AG": 20, "AH": 20, "AI": 21, "AJ": 21, "AK": 21, "AL": 21,
@@ -67,9 +82,13 @@ BOOT_END = {
 PARAM_BLOCK_COLS = {
     "CE", "CF", "CG", "CH", "CI", "CJ", "CQ", "CR", "CS", "CT", "CU",
     "DD", "DE", "DF", "DG", "DH", "DI", "DJ", "DK", "DL", "DM", "DN", "DO",
-    "DP", "DQ", "DR", "DS", "DT", "DU", "DV", "DW", "DX", "DY", "DZ",
-    "EA", "EB", "EC", "ED", "EE",
+    "DP", "DQ", "DR", "DS", "DT", "DU", "DV", "DW", "DX", "DY",
+    "EE",
 }
+
+# Columns holding the Dec-specific hardcoded per-year breakdown table that
+# _write_dynamic_year_breakdown replaces. See the NOTE above.
+YEAR_BREAKDOWN_COLS = ("DZ", "EA", "EB", "EC", "ED")
 
 
 def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_col: int = None) -> None:
@@ -156,13 +175,23 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
     finally:
         source_wb.close()
 
-    _write_dynamic_year_breakdown(ws)
+    _write_dynamic_year_breakdown(ws, last_target_row)
 
 
-def _write_dynamic_year_breakdown(ws) -> None:
+def _write_dynamic_year_breakdown(ws, last_target_row: int = 3001) -> None:
     """Replaces Dec's hardcoded per-year row-bound COUNT columns (e.g. AH$2:AH$249
     for 2021 specifically) with COUNTIFS keyed on this sheet's own Year column (CO),
-    so a new calendar year needs no manual edit."""
+    so a new calendar year needs no manual edit.
+
+    Fix round 1: also explicitly clears rows 4..last_target_row of
+    DZ/EA/EB/EC/ED. The baseline fill_sheet_from_pattern call (these columns
+    are no longer in PARAM_BLOCK_COLS, see the module-level NOTE) writes a
+    row-3-shifted formula into every one of those rows first; because the
+    source row-3 formulas in EA/EB/EC are fully $-anchored (e.g.
+    "=COUNT($AH$2:$AH$249)"), shifting is a no-op and the same Dec-specific
+    literal would otherwise be duplicated down every row. Clearing them here
+    guarantees no Dec-specific literal survives anywhere in these columns.
+    """
     ws["EA2"] = "Pos1"
     ws["EB2"] = "Pos2"
     ws["EC2"] = "Pos3"
@@ -172,3 +201,11 @@ def _write_dynamic_year_breakdown(ws) -> None:
     ws["EB3"] = '=COUNTIFS($CO$3:$CO$3000,DZ3,$AJ$3:$AJ$3000,"<>")'
     ws["EC3"] = '=COUNTIFS($CO$3:$CO$3000,DZ3,$AL$3:$AL$3000,"<>")'
     ws["ED3"] = "=SUM(EA3:EC3)"
+
+    for col_letter in YEAR_BREAKDOWN_COLS:
+        col_idx = column_index_from_string(col_letter)
+        for row in range(4, last_target_row + 1):
+            # NOTE: ws.cell(row, column, value=None) is a no-op in openpyxl
+            # (it only assigns when value is not None) -- must set .value
+            # directly to actually clear a previously-written cell.
+            ws.cell(row=row, column=col_idx).value = None
