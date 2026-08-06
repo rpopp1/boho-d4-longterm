@@ -48,6 +48,21 @@ def _populate_throwaway_copy(template_path: str, dec_source_path: str, throwaway
         for cell in row:
             if cell.value is not None:
                 data_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+
+    # Seed the Johansen_Monthly walk-forward log (F:I) with Dec's real
+    # historical values. As of the Task 11 v2 redesign, F/G/H/I are all
+    # manually-maintained columns in the generated template (no formula
+    # derives them) — Position Model's LOOKUP($A-1, Johansen_Monthly!$G:$G,
+    # ...!$H:$H / ...!$I:$I) formulas have nothing to find without this,
+    # regardless of any other fix, since this dependency predates and is
+    # independent of the spill-anchor defect that was fixed above it.
+    dec_jm = dec_wb["Johansen_Monthly"]
+    jm_ws = wb["Johansen_Monthly"]
+    for row in dec_jm.iter_rows(min_row=2, max_row=dec_jm.max_row, min_col=6, max_col=9):  # F:I
+        for cell in row:
+            if cell.value is not None:
+                jm_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+
     wb.save(throwaway_path)
 
 
