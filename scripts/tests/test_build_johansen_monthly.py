@@ -66,5 +66,16 @@ def test_column_b_still_correctly_filled_per_row():
     wb = openpyxl.Workbook()
     write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
     ws = wb["Johansen_Monthly"]
-    assert ws["B2"].value == '=IF(MONTH(A2)<>MONTH(A3), ROW(A2)+ROW(DiffLag!B3)-ROW(A2)-1, "")'
-    assert ws["B3"].value == '=IF(MONTH(A3)<>MONTH(A4), ROW(A3)+ROW(DiffLag!B4)-ROW(A3)-1, "")'
+    assert ws["B2"].value == '=IF(OR(A2="",A3=""),"",IF(MONTH(A2)<>MONTH(A3), ROW(A2)+ROW(DiffLag!B3)-ROW(A2)-1, ""))'
+    assert ws["B3"].value == '=IF(OR(A3="",A4=""),"",IF(MONTH(A3)<>MONTH(A4), ROW(A3)+ROW(DiffLag!B4)-ROW(A3)-1, ""))'
+
+def test_column_b_has_blank_guard_against_boundary_value_errors():
+    wb = openpyxl.Workbook()
+    write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Johansen_Monthly"]
+    # At boundary rows where DiffLag!B{row+1} returns "", column A becomes ""
+    # and MONTH("") errors in Excel. The guard IF(OR(A{row}="",A{row+1}=""),...)
+    # prevents this, matching the old design's blank-cell behavior.
+    b_formula = ws["B5"].value
+    assert 'IF(OR(A5="",A6="")' in b_formula, "Column B must have blank guard clause"
+    assert "MONTH(" in b_formula, "Column B must still check month boundaries"
