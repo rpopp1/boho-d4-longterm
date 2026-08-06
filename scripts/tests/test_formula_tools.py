@@ -1,6 +1,7 @@
 import pathlib
 from formula_tools import extract_row_formulas
 from formula_tools import shift_formula_rows
+from config_map import CONSTANT_MAP
 
 SOURCE = pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt"
 SOURCE_PATH = SOURCE.read_text().strip()
@@ -62,3 +63,26 @@ def test_shift_does_not_corrupt_trailing_identifier_text():
 
 def test_shift_does_not_corrupt_function_name_collision():
     assert shift_formula_rows("=LOG10(A2)", 1) == "=LOG10(A3)"
+
+
+def test_rewrite_single_constant():
+    from formula_tools import rewrite_constants
+    formula = "=IF($L3<=$DV$6,0,IF(AND($M2=0,$L3>=M$1),$DX$3,M2))"
+    result = rewrite_constants(formula, CONSTANT_MAP)
+    assert "$DV$6" not in result
+    assert "ZExitThreshold" in result
+    assert "$DX$3" in result  # not in the map, left untouched
+
+def test_rewrite_leaves_unmapped_addresses_untouched():
+    from formula_tools import rewrite_constants
+    formula = "=Data!A2"
+    assert rewrite_constants(formula, CONSTANT_MAP) == "=Data!A2"
+
+def test_rewrite_multiple_constants_in_one_formula():
+    from formula_tools import rewrite_constants
+    # $DK$5 is HOGalPerContract per Task 4's reconciled map (confirmed against the
+    # live workbook's real labels); $DK$2 is a distinct constant (ZLCentsPerLB),
+    # so this test uses $DK$5 twice to exercise multi-occurrence rewriting.
+    formula = "=S2*($Z2*$DK$5-$AA2*$DK$5)"
+    result = rewrite_constants(formula, CONSTANT_MAP)
+    assert result == "=S2*($Z2*HOGalPerContract-$AA2*HOGalPerContract)"

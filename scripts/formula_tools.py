@@ -54,3 +54,23 @@ def shift_formula_rows(formula: str, row_delta: int) -> str:
         return f"{sheet}{colabs}{col}{new_row}"
 
     return _CELL_REF_RE.sub(_replace, formula)
+
+
+def rewrite_constants(formula: str, constant_map: dict) -> str:
+    """Rewrite constant cell addresses in a formula to their defined names.
+
+    Args:
+        formula: A formula string (e.g., "=IF($DV$6>0,$DK$5,0)")
+        constant_map: A dict mapping addresses to defined names (e.g., {"$DV$6": "ZExitThreshold"})
+
+    Returns:
+        The formula with addresses replaced by their defined names.
+
+    Note:
+        Addresses are sorted by length (longest first) to prevent partial matches
+        (e.g., "$DK$2" won't get incorrectly matched inside "$DK$25").
+    """
+    # Longest addresses first so "$DK$2" doesn't get partially matched inside a longer token.
+    for address in sorted(constant_map, key=len, reverse=True):
+        formula = formula.replace(address, constant_map[address])
+    return formula
