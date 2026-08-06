@@ -82,15 +82,38 @@ BOOT_END = {
 }
 
 PARAM_BLOCK_COLS = {
-    "CE", "CF", "CG", "CH", "CI", "CJ", "CQ", "CR", "CS", "CT", "CU",
     "DD", "DE", "DF", "DG", "DH", "DI", "DJ", "DK", "DL", "DM", "DN", "DO",
     "DP", "DQ", "DR", "DS", "DT", "DU", "DV", "DW", "DX", "DY",
-    "EE",
 }
+
+# MAJOR 4: CE-CJ ("RA 2021 Cumulative PnL" ... "RA 2026 Cumulative PnL") and
+# CQ-CU ("2021 Cumulative PnL" ... "2025 Cumulative PnL") used to be in
+# PARAM_BLOCK_COLS and literally copied from Dec. Inspection of the live
+# workbook showed these are NOT one-off calibration cells at all -- each
+# column is Dec's real per-calendar-year PnL total, keyed by a literal fixed
+# row offset into CP/CD (e.g. CR3='=CP250', CS3='=CP495' -- 250/495 are simply
+# where 2022/2023 happen to start in Dec's specific data; CF3='=CD487' is the
+# RA equivalent). This is exactly the "hardcoded per-year columns requiring a
+# new column every January" defect this project exists to eliminate -- one
+# column per year, with Dec-specific row numbers baked into the formula, and
+# no room for a 7th year (2026 has no RA column, 2026 CQ-column doesn't
+# exist) without editing the sheet by hand.
+#
+# These are now decommissioned entirely and replaced by genuine SUMIFS-based
+# per-year totals in the DZ:EF dynamic year-breakdown table below (EE/EF),
+# keyed on this sheet's own Year column (CO) against the real per-day PnL
+# columns (BK = "Grand Total PnL", BT = "Effective Daily PnL" i.e. the RA
+# equivalent) -- no hardcoded row bounds, works for any number of years.
+DECOMMISSIONED_PER_YEAR_COLS = ("CE", "CF", "CG", "CH", "CI", "CJ", "CQ", "CR", "CS", "CT", "CU")
 
 # Columns holding the Dec-specific hardcoded per-year breakdown table that
 # _write_dynamic_year_breakdown replaces. See the NOTE above.
 YEAR_BREAKDOWN_COLS = ("DZ", "EA", "EB", "EC", "ED", "EE", "EF")
+
+# How many calendar-year rows the dynamic year-breakdown table enumerates
+# before its Total row (generous headroom, matching this project's general
+# "well over a decade" philosophy for row capacity elsewhere).
+NUM_YEAR_BREAKDOWN_ROWS = 15
 
 # CRITICAL 1: self-referencing accumulator/drawdown columns (e.g.
 # Y{row} = Y{row-1}+X{row}). During the strategy's ~20-row warm-up window the
@@ -180,18 +203,38 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
 
         # Fix up PARAM_BLOCK columns: static side-panel cells, copied literally
         # from the source wherever it has content, never shifted or extended.
+        #
+        # CRITICAL 3 fix: this loop used to `continue` (skip) wherever the
+        # source cell was None, which meant the target cell retained whatever
+        # the earlier baseline fill_sheet_from_pattern shift-fill pass had
+        # already written there -- these columns are only genuinely populated
+        # in the source's first ~30 rows (or, for a couple, up to ~230 rows),
+        # so every row beyond that leaked thousands of shifted-formula/literal
+        # cells per column. Setting .value directly (not skipping on None)
+        # clears that leftover baseline-fill garbage, and iterating the full
+        # row range up to last_target_row (not capped at src.max_row) ensures
+        # rows beyond the source's own extent are cleared too.
         for col_letter in PARAM_BLOCK_COLS:
             col_idx = column_index_from_string(col_letter)
             if col_idx > max_col:
                 continue
-            copy_end = min(last_target_row, src.max_row)
-            for row in range(3, copy_end + 1):
+            for row in range(3, last_target_row + 1):
                 value = src.cell(row=row, column=col_idx).value
-                if value is None:
-                    continue
                 if isinstance(value, str) and value.startswith("="):
                     value = rewrite_constants(value, CONSTANT_MAP)
-                ws.cell(row=row, column=col_idx, value=value)
+                ws.cell(row=row, column=col_idx).value = value
+
+        # MAJOR 4 / CRITICAL 3: fully decommission the hardcoded per-year PnL
+        # columns (see DECOMMISSIONED_PER_YEAR_COLS above) -- clear every row,
+        # including the header row's Dec-specific year labels, so nothing
+        # about them survives anywhere in the built sheet. Their real numbers
+        # now live in the DZ:EF dynamic year-breakdown table instead.
+        for col_letter in DECOMMISSIONED_PER_YEAR_COLS:
+            col_idx = column_index_from_string(col_letter)
+            if col_idx > max_col:
+                continue
+            for row in range(1, last_target_row + 1):
+                ws.cell(row=row, column=col_idx).value = None
     finally:
         source_wb.close()
 
@@ -225,32 +268,59 @@ def _wrap_accumulator_self_references(ws, last_target_row: int) -> None:
 
 
 def _write_dynamic_year_breakdown(ws, last_target_row: int = 3001) -> None:
-    """Replaces Dec's hardcoded per-year row-bound COUNT columns (e.g. AH$2:AH$249
-    for 2021 specifically) with COUNTIFS keyed on this sheet's own Year column (CO),
-    so a new calendar year needs no manual edit.
+    """Replaces Dec's hardcoded per-year row-bound COUNT/PnL columns (e.g.
+    AH$2:AH$249 or CR3='=CP250', both specific to Dec's own historical row
+    numbers) with a genuine, formula-driven multi-year table keyed on this
+    sheet's own Year column (CO), so activating a new calendar year -- or a
+    brand-new book with completely different dates -- needs no manual edit
+    and no new column.
 
-    Fix round 1: also explicitly clears rows 4..last_target_row of
-    DZ/EA/EB/EC/ED. The baseline fill_sheet_from_pattern call (these columns
-    are no longer in PARAM_BLOCK_COLS, see the module-level NOTE) writes a
-    row-3-shifted formula into every one of those rows first; because the
-    source row-3 formulas in EA/EB/EC are fully $-anchored (e.g.
-    "=COUNT($AH$2:$AH$249)"), shifting is a no-op and the same Dec-specific
-    literal would otherwise be duplicated down every row. Clearing them here
-    guarantees no Dec-specific literal survives anywhere in these columns.
+    MAJOR 4 fix: the previous design wrote exactly one data row (DZ3/
+    EA3:ED3) -- it never actually enumerated multiple years or produced a
+    total, despite the column header claiming a "Total" row existed. This
+    now writes NUM_YEAR_BREAKDOWN_ROWS year-rows (each year = the previous
+    row's year + 1, starting from this sheet's own first data row via
+    YEAR(A3)) followed by a genuine Total row, then clears everything past
+    it -- capped so the table never extends past last_target_row (relevant
+    only for very small num_rows, e.g. in tests; the production 3,000-row
+    template has ample headroom).
+
+    EA/EB/EC/ED reproduce Dec's per-year trade-count columns (Pos1/Pos2/Pos3/
+    Total), unchanged in formula shape from the original fix. EE/EF are new:
+    they replace the decommissioned CQ-CU ("<year> Cumulative PnL") and CE-CJ
+    ("RA <year> Cumulative PnL") columns with genuine per-year sums via
+    SUMIFS against this sheet's own real per-day PnL columns (BK = "Grand
+    Total PnL", BT = "Effective Daily PnL", the risk-adjusted equivalent).
     """
     ws["EA2"] = "Pos1"
     ws["EB2"] = "Pos2"
     ws["EC2"] = "Pos3"
     ws["ED2"] = "Total"
-    ws["DZ3"] = "=YEAR(A3)"
-    ws["EA3"] = '=COUNTIFS($CO$3:$CO$3000,DZ3,$AH$3:$AH$3000,"<>")'
-    ws["EB3"] = '=COUNTIFS($CO$3:$CO$3000,DZ3,$AJ$3:$AJ$3000,"<>")'
-    ws["EC3"] = '=COUNTIFS($CO$3:$CO$3000,DZ3,$AL$3:$AL$3000,"<>")'
-    ws["ED3"] = "=SUM(EA3:EC3)"
+    ws["EE2"] = "Cumulative PnL"
+    ws["EF2"] = "RA Cumulative PnL"
+
+    num_year_rows = min(NUM_YEAR_BREAKDOWN_ROWS, max(1, last_target_row - 3))
+    first_year_row = 3
+    last_year_row = first_year_row + num_year_rows - 1
+    total_row = last_year_row + 1
+
+    for row in range(first_year_row, last_year_row + 1):
+        ws[f"DZ{row}"] = "=YEAR(A3)" if row == first_year_row else f"=DZ{row - 1}+1"
+        ws[f"EA{row}"] = f'=COUNTIFS($CO$3:$CO$3000,DZ{row},$AH$3:$AH$3000,"<>")'
+        ws[f"EB{row}"] = f'=COUNTIFS($CO$3:$CO$3000,DZ{row},$AJ$3:$AJ$3000,"<>")'
+        ws[f"EC{row}"] = f'=COUNTIFS($CO$3:$CO$3000,DZ{row},$AL$3:$AL$3000,"<>")'
+        ws[f"ED{row}"] = f"=SUM(EA{row}:EC{row})"
+        ws[f"EE{row}"] = f"=SUMIFS($BK$3:$BK$3000,$CO$3:$CO$3000,DZ{row})"
+        ws[f"EF{row}"] = f"=SUMIFS($BT$3:$BT$3000,$CO$3:$CO$3000,DZ{row})"
+
+    if total_row <= last_target_row:
+        ws[f"DZ{total_row}"] = "Total"
+        for col_letter in ("EA", "EB", "EC", "ED", "EE", "EF"):
+            ws[f"{col_letter}{total_row}"] = f"=SUM({col_letter}{first_year_row}:{col_letter}{last_year_row})"
 
     for col_letter in YEAR_BREAKDOWN_COLS:
         col_idx = column_index_from_string(col_letter)
-        for row in range(4, last_target_row + 1):
+        for row in range(total_row + 1, last_target_row + 1):
             # NOTE: ws.cell(row, column, value=None) is a no-op in openpyxl
             # (it only assigns when value is not None) -- must set .value
             # directly to actually clear a previously-written cell.

@@ -71,20 +71,21 @@ def test_year_breakdown_rows_beyond_3_have_no_leftover_dec_literals():
     # fixed-row-range COUNTs like '=COUNT($AH$250:$AH$494)') into the built
     # sheet -- _write_dynamic_year_breakdown only overwrote rows 2-3, so rows
     # 4-9 silently retained Dec-specific literals. Confirm none survive.
+    #
+    # MAJOR 4 superseded the single-row design: rows 4+ are no longer cleared
+    # blank -- they now hold the genuine, formula-driven multi-year breakdown
+    # (see test_dynamic_year_breakdown_enumerates_multiple_years_plus_total).
+    # What must never reappear is Dec's own literal fixed-row-bound formulas.
     wb = openpyxl.Workbook()
     write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
     ws = wb["Position Model"]
-    for row in range(4, 10):
-        for col in ("DZ", "EA", "EB", "EC", "ED"):
+    for row in range(3, 12):
+        for col in ("EA", "EB", "EC"):
             v = ws[f"{col}{row}"].value
-            assert v is None
-    # And row 3 (row 2 header labels aside) must not contain any of the
-    # Dec-specific literal per-year row bounds either.
-    for col in ("EA", "EB", "EC"):
-        v = ws[f"{col}3"].value
-        assert "$AH$2:$AH$249" not in (v or "")
-        assert "$AJ$2:$AJ$249" not in (v or "")
-        assert "$AL$2:$AL$249" not in (v or "")
+            assert "$AH$2:$AH$249" not in (v or "")
+            assert "$AJ$2:$AJ$249" not in (v or "")
+            assert "$AL$2:$AL$249" not in (v or "")
+            assert "$AH$250:$AH$494" not in (v or "")
 
 
 def test_bootstrap_columns_reach_steady_state_row_shift():
@@ -149,6 +150,83 @@ def test_accumulator_self_references_are_iferror_wrapped():
     # doesn't propagate past that one row either.
     y25 = ws["Y25"].value
     assert y25 == "=IFERROR(Y24,0)+X25"
+
+
+def test_param_block_cols_have_no_leftover_baseline_fill_beyond_source_extent():
+    # CRITICAL 3: PARAM_BLOCK_COLS's literal-copy pass used to `continue` (skip)
+    # wherever the source was None, silently leaving whatever the earlier
+    # baseline fill_sheet_from_pattern shift-fill pass had written underneath.
+    # DJ/DK/DL/DM/DN are only populated through row 227 in the live source;
+    # nothing beyond that should survive in the built sheet at all.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    for col in ("DJ", "DK", "DL", "DM", "DN"):
+        for row in (228, 250, 300, 301):
+            assert ws[f"{col}{row}"].value is None, f"{col}{row} unexpectedly non-empty"
+
+
+def test_param_block_cols_still_copy_their_real_populated_extent():
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    # DK1 is a real literal constant (750000) in the live source's param block.
+    assert ws["DK1"].value == 750000
+
+
+def test_decommissioned_per_year_pnl_cols_are_fully_cleared():
+    # MAJOR 4: CQ-CU/CE-CJ used to be literally copied from Dec (a column per
+    # calendar year, with hardcoded row bounds like "=CP250" for 2022's start).
+    # They're now handled generically by the dynamic year-breakdown table
+    # instead, so nothing -- not even Dec's header labels -- should survive in
+    # these columns anywhere in the built sheet.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    for col in ("CE", "CF", "CG", "CH", "CI", "CJ", "CQ", "CR", "CS", "CT", "CU"):
+        for row in (1, 2, 3, 4, 250, 300):
+            v = ws[f"{col}{row}"].value
+            assert v is None, f"{col}{row} unexpectedly non-empty: {v!r}"
+
+
+def test_dynamic_year_breakdown_enumerates_multiple_years_plus_total():
+    # MAJOR 4: the old design wrote exactly one data row (DZ3/EA3:ED3). The
+    # real fix must enumerate a genuine sequence of years, starting from the
+    # sheet's own first data row, and end with a Total row -- all formula
+    # driven, no Dec-specific hardcoded years or row bounds.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    assert ws["DZ3"].value == "=YEAR(A3)"
+    assert ws["DZ4"].value == "=DZ3+1"
+    assert ws["DZ5"].value == "=DZ4+1"
+
+    total_row = None
+    for row in range(3, 40):
+        if ws[f"DZ{row}"].value == "Total":
+            total_row = row
+            break
+    assert total_row is not None, "no Total row found in the dynamic year breakdown"
+    assert total_row > 4, "breakdown must enumerate more than a single year before the Total row"
+
+    ea_total = ws[f"EA{total_row}"].value
+    assert ea_total == f"=SUM(EA3:EA{total_row - 1})"
+
+    # Everything past the Total row must be cleared.
+    assert ws[f"DZ{total_row + 1}"].value is None
+
+
+def test_dynamic_year_breakdown_produces_genuine_per_year_pnl_sums():
+    # MAJOR 4: the real per-year PnL totals (Dec's CQ-CU / CE-CJ) must now be
+    # produced via SUMIFS keyed on this sheet's own Year column (CO), not by
+    # literally copying Dec's per-year columns.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    ee3 = ws["EE3"].value
+    assert ee3 == "=SUMIFS($BK$3:$BK$3000,$CO$3:$CO$3000,DZ3)"
+    ef3 = ws["EF3"].value
+    assert ef3 == "=SUMIFS($BT$3:$BT$3000,$CO$3:$CO$3000,DZ3)"
 
 
 def test_non_self_referencing_drawdown_columns_are_untouched():
