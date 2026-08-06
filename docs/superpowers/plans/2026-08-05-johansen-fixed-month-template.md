@@ -1159,11 +1159,21 @@ def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> 
     # directly (not via fill_sheet_from_pattern) because that function would
     # also try to touch column A from source, where it's still the old FILTER
     # spill anchor we're deliberately replacing above.
-    b_pattern = extract_row_formulas(source_path, "Johansen_Monthly", row=2, max_col=2)["B"]
+    # A blank-guard wraps the source's own MONTH() comparison: the old FILTER
+    # spill left cells past its extent genuinely blank (an unentered cell),
+    # where MONTH(blank) doesn't error. Column A is now a formula everywhere,
+    # so at the boundary row (A{row+1} beyond real data), DiffLag!B resolves
+    # to a formula-returned "" — and MONTH("") is a #VALUE! error, which would
+    # otherwise land in column B exactly at the newest/incomplete month
+    # boundary a human relies on for the manual log workflow. Found by Task
+    # 15's review, not by the live source (which never hits this case).
     for i in range(num_rows):
         row = 2 + i
-        shifted = shift_formula_rows(b_pattern, row - 2)
-        ws[f"B{row}"] = rewrite_constants(shifted, CONSTANT_MAP)
+        end_row_expr = f"ROW(A{row})+ROW(DiffLag!B{row + 1})-ROW(A{row})-1"
+        ws[f"B{row}"] = (
+            f'=IF(OR(A{row}="",A{row + 1}=""),"",'
+            f'IF(MONTH(A{row})<>MONTH(A{row + 1}), {end_row_expr}, ""))'
+        )
 
     # C2/D2: fixed single-row lookups of the current live Johansen weight.
     # Written once, unshifted — these lack $ anchors but are NOT row-relative
