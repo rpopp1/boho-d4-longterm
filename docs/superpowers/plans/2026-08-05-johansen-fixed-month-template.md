@@ -712,7 +712,7 @@ def fill_sheet_from_pattern(
                 target_ws[f"{col_letter}{target_row}"] = value
 ```
 
-Note: the new anchor's `ref` is deliberately written as a single cell (`f"{col_letter}{target_start_row}"`), not the source's original multi-row extent (e.g. `A2:A1386`) — the source's `ref` is just Excel's last-cached spill size for however much data it had, which is meaningless for a template with empty Data; Excel recomputes the true spill extent automatically the next time the file is opened and recalculated with real data.
+Note (superseded — kept for history, see the `end_row`/`ref` code above for the actual behavior): an earlier version of this fix wrote `ref` as a single cell, reasoning that Excel would recompute the true spill extent automatically. Task 15's Dec-replay validation proved this wrong: a single-cell `ref` makes Excel treat the formula as a legacy CSE array formula (returning only its first value) rather than a real dynamic-array spill, regardless of recalculation. The corrected code above spans `ref` across the sheet's full row capacity instead — the exact end value doesn't need to match the eventual real data extent, only the ref needs to be multi-cell for Excel to recognize it as a genuine dynamic array to begin with.
 
 - [ ] **Step 4: Run test to verify it passes**
 
