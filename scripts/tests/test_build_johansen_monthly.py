@@ -31,6 +31,9 @@ def test_spill_anchors_are_array_formulas_written_once():
         cell = ws[f"{col}2"].value
         assert isinstance(cell, ArrayFormula), f"{col}2 should be a spill anchor"
         assert "FILTER(" in cell.text
+        # ref must span more than one cell (not a single-cell legacy CSE array)
+        # or Excel treats it as a single-cell array instead of a dynamic-array spill
+        assert cell.ref == f"{col}2:{col}11", f"{col}2's ref should span multiple rows, got {cell.ref}"
         # Must not be duplicated into later rows.
         for row in range(3, 12):
             assert ws[f"{col}{row}"].value is None, f"{col}{row} should be empty"

@@ -40,9 +40,16 @@ def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> 
 
         # F2/G2: spill anchors (month-end log compaction), same treatment as
         # column A — preserve as real ArrayFormula objects, written once.
+        # ref must span more than one cell (see sheet_cloner.py's identical fix,
+        # Task 7 Addendum) or Excel treats it as a single-cell legacy CSE array
+        # formula instead of a real dynamic-array spill — this exact bug was
+        # caught by Task 15's Dec-replay validation (#N/A cascading through
+        # every downstream LOOKUP that depends on this log table).
         for col in ("F", "G"):
             cell = src[f"{col}2"]
-            ws[f"{col}2"] = ArrayFormula(ref=f"{col}2", text=cell.value.text)
+            end_row = 2 + max(num_rows, 2) - 1
+            ref = f"{col}2:{col}{end_row}"
+            ws[f"{col}2"] = ArrayFormula(ref=ref, text=cell.value.text)
     finally:
         source_wb.close()
 
