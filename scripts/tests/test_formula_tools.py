@@ -86,3 +86,32 @@ def test_rewrite_multiple_constants_in_one_formula():
     formula = "=S2*($Z2*$DK$5-$AA2*$DK$5)"
     result = rewrite_constants(formula, CONSTANT_MAP)
     assert result == "=S2*($Z2*HOGalPerContract-$AA2*HOGalPerContract)"
+
+
+def test_unwrap_scalar_array_formula_single_cell_ref():
+    # MINOR 6: Matrices!H7 is a live example -- an ArrayFormula whose ref is
+    # just its own coordinate ("H7"), a legacy CSE array formula stored for
+    # historical reasons that doesn't need array/spill semantics.
+    from formula_tools import unwrap_scalar_array_formula
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    value = ArrayFormula(ref="H7", text="=INDEX(DiffLag!E:E,$B$2)")
+    assert unwrap_scalar_array_formula(value, "H7") == "=INDEX(DiffLag!E:E,$B$2)"
+
+
+def test_unwrap_scalar_array_formula_raises_on_multi_cell_ref():
+    from formula_tools import unwrap_scalar_array_formula
+    from openpyxl.worksheet.formula import ArrayFormula
+    import pytest
+
+    value = ArrayFormula(ref="H7:H10", text="=SOME_SPILL_FORMULA()")
+    with pytest.raises(NotImplementedError):
+        unwrap_scalar_array_formula(value, "H7")
+
+
+def test_unwrap_scalar_array_formula_passes_through_non_array_values():
+    from formula_tools import unwrap_scalar_array_formula
+
+    assert unwrap_scalar_array_formula("=A1+B1", "C1") == "=A1+B1"
+    assert unwrap_scalar_array_formula(5, "C1") == 5
+    assert unwrap_scalar_array_formula(None, "C1") is None
