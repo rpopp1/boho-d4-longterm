@@ -17,4 +17,6 @@ def test_all_layout_entries_produce_a_defined_name():
     from config_map import CONFIG_LAYOUT
     for name, cell, _default in CONFIG_LAYOUT:
         assert name in wb.defined_names, f"missing defined name {name}"
-        assert wb.defined_names[name].attr_text == f"Config!${cell[0]}${cell[1:]}"
+        col = "".join(ch for ch in cell if ch.isalpha())
+        row = "".join(ch for ch in cell if ch.isdigit())
+        assert wb.defined_names[name].attr_text == f"Config!${col}${row}"
