@@ -1728,7 +1728,7 @@ Run (before and after Steps 1-4, comparing the two): `py -c "import os; print(os
 
 ## Definition of done
 
-- `Johansen_Template_Engine.xlsx` exists in the `BOHO Trading` folder with the 9 sheets in the specified order, Config-driven throughout, no scattered literal constants remaining in Position Model or Matrices.
+- `Johansen_Template_Engine.xlsx` exists in the `BOHO Trading` folder with the 10 sheets in the specified order (Notes, Config, Data, DiffLag, Matrices, Johansen, Johansen_Monthly, Monthly Beta, Position Model, Results), Config-driven throughout, no scattered literal constants remaining in Position Model or Matrices.
 - Johansen_Monthly's Active End Row is a self-updating formula.
 - Position Model's per-calendar-year breakdown is dynamic (COUNTIFS/SUMIFS-keyed, no hardcoded per-year row bounds).
 - `py -m pytest scripts/tests/ -v` passes in full.
