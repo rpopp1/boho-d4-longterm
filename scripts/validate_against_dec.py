@@ -1,8 +1,10 @@
 import csv
+import datetime
 import shutil
 import openpyxl
 import win32com.client
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.datetime import to_excel
 from config_map import CONFIG_LAYOUT
 from build_position_model import PARAM_BLOCK_COLS, DECOMMISSIONED_PER_YEAR_COLS, YEAR_BREAKDOWN_COLS
 
@@ -63,6 +65,20 @@ EXCEL_ERROR_VALUES = ("#N/A", "#DIV/0!", "#REF!", "#VALUE!", "#NAME?", "#NULL!",
 
 def _is_excel_error(value) -> bool:
     return isinstance(value, str) and value.startswith(EXCEL_ERROR_VALUES)
+
+
+def _normalize_for_compare(value):
+    """openpyxl returns a python datetime for a cell whose NUMBER FORMAT is a
+    date, and a plain int/float for the identical underlying value when the
+    cell has no date format applied. Position Model!A holds the same real
+    dates in both workbooks, but Dec's own column A cells happen to carry a
+    date number format while the template's freshly-created column A cells
+    don't -- a cosmetic formatting difference, not a value difference.
+    Normalize both to the underlying Excel serial number before comparing so
+    this doesn't manufacture a mismatch for every single row."""
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return to_excel(value)
+    return value
 
 
 def compare_columns_for(max_col: int) -> list:
@@ -167,8 +183,8 @@ def run_validation(template_path: str, dec_source_path: str, output_diff_path: s
     max_row = min(dec_pm.max_row, template_pm.max_row)
     for row in range(3, max_row + 1):
         for col in compare_columns:
-            dec_val = dec_pm[f"{col}{row}"].value
-            tmpl_val = template_pm[f"{col}{row}"].value
+            dec_val = _normalize_for_compare(dec_pm[f"{col}{row}"].value)
+            tmpl_val = _normalize_for_compare(template_pm[f"{col}{row}"].value)
 
             # CRITICAL 2's second, explicit check: the template must never
             # show an error where Dec's real recalculated value is a plain

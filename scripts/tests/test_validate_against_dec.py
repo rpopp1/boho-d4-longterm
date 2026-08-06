@@ -1,5 +1,8 @@
+import datetime
 import pathlib
-from validate_against_dec import run_validation, compare_columns_for, EXCLUDED_COMPARE_COLUMNS, _is_excel_error
+from validate_against_dec import (
+    run_validation, compare_columns_for, EXCLUDED_COMPARE_COLUMNS, _is_excel_error, _normalize_for_compare,
+)
 
 SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").read_text().strip()
 
@@ -52,6 +55,18 @@ def test_is_excel_error_detects_error_sentinels_not_plain_values():
     assert not _is_excel_error(None)
     assert not _is_excel_error("Sell")
     assert not _is_excel_error(1.5)
+
+
+def test_normalize_for_compare_reconciles_datetime_and_serial_number():
+    # Position Model!A holds identical real dates in both workbooks, but Dec's
+    # column A cells carry a date number format (openpyxl returns a python
+    # datetime) while the template's freshly-created cells don't (openpyxl
+    # returns the plain underlying int/float) -- a cosmetic formatting
+    # difference that must not manufacture a mismatch for every row.
+    assert _normalize_for_compare(datetime.datetime(2021, 1, 5)) == 44201.0
+    assert _normalize_for_compare(44201) == 44201
+    assert _normalize_for_compare("Sell") == "Sell"
+    assert _normalize_for_compare(None) is None
 
 
 def test_validation_reports_no_mismatches_on_dec_replay():

@@ -152,6 +152,41 @@ def test_accumulator_self_references_are_iferror_wrapped():
     assert y25 == "=IFERROR(Y24,0)+X25"
 
 
+def test_additional_self_referencing_columns_caught_by_widened_validation_are_wrapped():
+    # CRITICAL 2's widened validation harness caught two more genuinely
+    # self-referencing columns beyond the original ~12-column enumeration:
+    # CP/CD ("Calendar Year Cumulative PnL"/RA equivalent) and the
+    # BM/BO/BQ/BU trade-state-machine cluster (BL/BN/BP/BR/BS/BT are NOT
+    # self-referencing themselves and resolve once these four are hardened).
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
+    ws = wb["Position Model"]
+
+    assert ws["CP3"].value == '=IF(CO3=CO2,IFERROR(CP2,0)+BK3,0)'
+    assert ws["CD21"].value == '=IF(CO21=CO20,IFERROR(CD20,0)+BT21,0)'
+
+    assert ws["BM21"].value == '=IF(BN21=1,1,IF(IFERROR(BM20,0)=1,IF(BL21=0,0,1),0))'
+    assert ws["BO21"].value == '=IF(BM21=0,0,IF(BN21=1,BL21,IFERROR(BO20,0)+BL21))'
+    assert ws["BQ21"].value == '=IF(BN21=1,0,IF(IFERROR(BQ20,0)=1,1,BP21))'
+    assert ws["BU21"].value == '=IF(BS21=0,0,IF(BN21=1,BT21,IFERROR(BU20,0)+BT21))'
+
+
+def test_boot_end_literal_copy_clears_genuinely_blank_source_cells():
+    # CRITICAL 3-class fix: the BOOT_END literal-copy loop (rows 3..boot_end-1)
+    # used to write via ws.cell(row, column, value=value), which is a no-op
+    # in openpyxl when value is None -- so wherever the source's bootstrap
+    # window is genuinely blank (e.g. BC6:BC19 in the live workbook -- BC's
+    # boot_end is 20, and only rows 3-5 have real fixed-row formulas, rows
+    # 6-19 are blank), whatever the baseline fill_sheet_from_pattern pass had
+    # already shifted into those cells (a nonsensical shifted version of
+    # BC's fixed-row-1268/1269 pattern) survived underneath.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=25)
+    ws = wb["Position Model"]
+    for row in range(6, 20):
+        assert ws[f"BC{row}"].value is None, f"BC{row} unexpectedly non-empty: {ws[f'BC{row}'].value!r}"
+
+
 def test_param_block_cols_have_no_leftover_baseline_fill_beyond_source_extent():
     # CRITICAL 3: PARAM_BLOCK_COLS's literal-copy pass used to `continue` (skip)
     # wherever the source was None, silently leaving whatever the earlier

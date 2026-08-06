@@ -131,7 +131,22 @@ NUM_YEAR_BREAKDOWN_ROWS = 15
 # they are not self-referencing accumulators, they derive directly from other
 # columns in the same row, so once CK/CL/BV/BW are hardened here they resolve
 # correctly with no wrap of their own.
-ACCUM_SELF_REF_COLS = ("Y", "AZ", "BE", "BJ", "CK", "CL", "CN", "BV", "BW", "BY")
+#
+# Follow-on catch via CRITICAL 2's widened validation harness (which is
+# exactly what it exists to do): CP/CD ("Calendar Year Cumulative PnL"/"RA ..."),
+# and BM/BO/BQ/BU (an interlocking trade-state-machine cluster alongside
+# BL/BN/BP/BR/BS/BT/BU -- "Trade Active", "Trade-Level PnL", "Stop State
+# (Latched)", "Effective Trade Cumulative PnL") are ALSO self-referencing in
+# exactly the same failure shape (e.g. BO{row}=IF(...,BO{row-1}+BL{row}),
+# CP{row}=IF(CO{row}=CO{row-1},CP{row-1}+BK{row},0)) and were not in the
+# original ~12-column enumeration, but suffer the identical permanent-error
+# propagation once a #N/A/#DIV/0! enters the chain. BL/BN/BP/BR/BS/BT are NOT
+# self-referencing themselves (they derive from BM/BO/BQ/BU/BL in the same
+# row) and resolve automatically once those four are hardened.
+ACCUM_SELF_REF_COLS = (
+    "Y", "AZ", "BE", "BJ", "CK", "CL", "CN", "BV", "BW", "BY",
+    "CP", "CD", "BM", "BO", "BQ", "BU",
+)
 
 
 def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_col: int = None) -> None:
@@ -193,7 +208,16 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
                 value = unwrap_scalar_array_formula(cell.value, cell.coordinate)
                 if isinstance(value, str) and value.startswith("="):
                     value = rewrite_constants(value, CONSTANT_MAP)
-                ws.cell(row=row, column=col_idx, value=value)
+                # CRITICAL 3-class fix: ws.cell(row, column, value=None) is a
+                # no-op in openpyxl (only assigns when value is not None) --
+                # must set .value directly, or wherever the source's
+                # bootstrap-window cell is genuinely blank (e.g. BC6:BC19),
+                # whatever the earlier baseline fill_sheet_from_pattern
+                # shift-fill pass already wrote there (a nonsensical shifted
+                # version of BC's fixed-row-1268/1269 pattern) survives
+                # underneath instead of being cleared. Found via CRITICAL 2's
+                # widened validation harness.
+                ws.cell(row=row, column=col_idx).value = value
 
             if boot_end <= last_target_row:
                 pattern_cell = src.cell(row=boot_end, column=col_idx)
