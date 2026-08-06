@@ -1642,16 +1642,37 @@ def _populate_throwaway_copy(template_path: str, dec_source_path: str, throwaway
     wb.save(throwaway_path)
 
 
-def _recalculate_with_excel(path: str) -> None:
-    excel = win32com.client.DispatchEx("Excel.Application")
-    excel.Visible = False
-    try:
-        wb = excel.Workbooks.Open(path)
-        excel.CalculateFullRebuild()
-        wb.Save()
-        wb.Close()
-    finally:
-        excel.Quit()
+def _recalculate_with_excel(path: str, max_retries: int = 3) -> None:
+    # Hardened after a real failure: excel.CalculateFullRebuild() can raise
+    # "Call was rejected by callee" if fired while Excel is still busy with
+    # its own implicit on-open recalculation — observed with the heavier
+    # formula load from the Johansen_Monthly redesign. A short settle delay
+    # plus a retry-with-fresh-Excel-instance loop resolves this; it is COM
+    # automation flakiness, not a formula defect.
+    import time
+
+    last_error = None
+    for attempt in range(max_retries):
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        try:
+            wb = excel.Workbooks.Open(path)
+            time.sleep(2)  # let Excel's own on-open recalculation settle
+            excel.CalculateFullRebuild()
+            wb.Save()
+            wb.Close()
+            excel.Quit()
+            return
+        except Exception as exc:
+            last_error = exc
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                time.sleep(3)
+    raise last_error
 
 
 def run_validation(template_path: str, dec_source_path: str, output_diff_path: str) -> list:
