@@ -682,7 +682,7 @@ def write_data_sheet(wb) -> None:
     ws["T5"] = "=HOGalPerContract"
 ```
 
-Add `"ZLCentsPerLB"` to `CONFIG_LAYOUT`/`CONSTANT_MAP` in `config_map.py` (Task 4's map) bound to default `60000`, mapping from Dec's `Data!$T$2`, since this constant lives on Data in Dec, not Position Model — update Task 4's files accordingly before running this test.
+No `config_map.py` changes are needed for this: Task 4's reconciled map already includes `ZLCentsPerLB`, `ZLMultiplier`, and `HOGalPerContract` in `CONFIG_LAYOUT` (found independently via Position Model's `$DK$2`/`$DK$3`/`$DK$5`, which hold the same conceptual unit constants as Data's `T2`/`T3`/`T5`). This sheet is hand-built (not run through the generic per-day cloner or `rewrite_constants`), so `write_data_sheet` references the defined names directly by name in the formula strings above — just confirm those three names already exist in `config_map.py` before running this test; they should.
 
 - [ ] **Step 4: Run test to verify it passes**
 
