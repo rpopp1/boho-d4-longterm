@@ -583,6 +583,127 @@ Expected: 2 passed
 
 - [ ] **Step 5: Save checkpoint**
 
+#### Task 7 Addendum (discovered during Task 11): array-formula (spill anchor) columns must not be duplicated per row
+
+Some source-sheet columns (confirmed via live inspection: `Johansen_Monthly!A2`, `F2`, `G2`) hold an Excel dynamic-array `FILTER(...)` formula stored as an `openpyxl.worksheet.formula.ArrayFormula` object, not a plain string — a single "spill anchor" whose result fills a range of cells automatically in real Excel. `fill_sheet_from_pattern` as built above has no awareness of this and will duplicate the identical anchor formula into every target row, which produces `#SPILL!` errors in real Excel (a spilling formula requires its spill range to be empty). Confirmed via a full scan that DiffLag, Monthly Beta, and Position Model contain **no** `ArrayFormula` cells in their pattern rows — this defect is isolated to columns that use `ArrayFormula`.
+
+**Files:**
+- Modify: `scripts/sheet_cloner.py`
+- Test: `scripts/tests/test_sheet_cloner.py`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# append to scripts/tests/test_sheet_cloner.py
+
+def test_fill_does_not_duplicate_array_formula_spill_anchor():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    fill_sheet_from_pattern(
+        target_ws=ws,
+        source_path=SOURCE_PATH,
+        source_sheet="Johansen_Monthly",
+        pattern_row=2,
+        target_start_row=2,
+        num_rows=10,
+        max_col=1,  # column A only — the FILTER spill anchor
+        constant_map=CONSTANT_MAP,
+    )
+    from openpyxl.worksheet.formula import ArrayFormula
+    a2 = ws["A2"].value
+    assert isinstance(a2, ArrayFormula)
+    assert "FILTER(DiffLag!$B$2:$B$1048576" in a2.text
+    # Every other target row must be left untouched — writing the same spill
+    # anchor into A3..A11 would corrupt the file with #SPILL! errors in Excel.
+    for row in range(3, 12):
+        assert ws[f"A{row}"].value is None
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd scripts && py -m pytest tests/test_sheet_cloner.py -v -k spill_anchor`
+Expected: FAIL — `A2` will not be an `ArrayFormula` instance (the unmodified implementation writes it as its unwrapped `.text` string like every other formula, since `extract_row_formulas` already unwraps `ArrayFormula` objects to plain text for all its other, already-tested uses).
+
+- [ ] **Step 3: Write the fix**
+
+```python
+# scripts/sheet_cloner.py — replace entirely with this version
+import openpyxl
+from openpyxl.worksheet.formula import ArrayFormula
+from openpyxl.utils import get_column_letter
+from formula_tools import extract_row_formulas, shift_formula_rows, rewrite_constants
+
+
+def _get_array_formula_columns(source_path: str, source_sheet: str, pattern_row: int, max_col: int) -> set:
+    """Column letters at pattern_row whose live-workbook cell is an ArrayFormula
+    (a dynamic-array spill anchor), read directly (not via extract_row_formulas,
+    which unwraps ArrayFormula to plain text and loses this distinction)."""
+    wb = openpyxl.load_workbook(source_path, data_only=False)
+    try:
+        ws = wb[source_sheet]
+        cols = set()
+        for col in range(1, max_col + 1):
+            cell = ws.cell(row=pattern_row, column=col)
+            if isinstance(cell.value, ArrayFormula):
+                cols.add(get_column_letter(col))
+        return cols
+    finally:
+        wb.close()
+
+
+def fill_sheet_from_pattern(
+    target_ws,
+    source_path: str,
+    source_sheet: str,
+    pattern_row: int,
+    target_start_row: int,
+    num_rows: int,
+    max_col: int,
+    constant_map: dict,
+) -> None:
+    pattern = extract_row_formulas(source_path, source_sheet, pattern_row, max_col)
+    spill_cols = _get_array_formula_columns(source_path, source_sheet, pattern_row, max_col)
+    # Re-read the raw ArrayFormula objects for spill columns so the written-out
+    # cell keeps its real type (a plain string would not spill correctly in Excel).
+    raw_array_formulas = {}
+    if spill_cols:
+        wb = openpyxl.load_workbook(source_path, data_only=False)
+        try:
+            ws = wb[source_sheet]
+            for col_letter in spill_cols:
+                cell = ws[f"{col_letter}{pattern_row}"]
+                raw_array_formulas[col_letter] = cell.value
+        finally:
+            wb.close()
+
+    for i in range(num_rows):
+        target_row = target_start_row + i
+        row_delta = target_row - pattern_row
+        for col_letter, value in pattern.items():
+            if col_letter in spill_cols:
+                if i == 0:
+                    original = raw_array_formulas[col_letter]
+                    target_ws[f"{col_letter}{target_start_row}"] = ArrayFormula(
+                        ref=f"{col_letter}{target_start_row}", text=original.text
+                    )
+                continue
+            if isinstance(value, str) and value.startswith("="):
+                shifted = shift_formula_rows(value, row_delta)
+                rewritten = rewrite_constants(shifted, constant_map)
+                target_ws[f"{col_letter}{target_row}"] = rewritten
+            else:
+                target_ws[f"{col_letter}{target_row}"] = value
+```
+
+Note: the new anchor's `ref` is deliberately written as a single cell (`f"{col_letter}{target_start_row}"`), not the source's original multi-row extent (e.g. `A2:A1386`) — the source's `ref` is just Excel's last-cached spill size for however much data it had, which is meaningless for a template with empty Data; Excel recomputes the true spill extent automatically the next time the file is opened and recalculated with real data.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd scripts && py -m pytest tests/test_sheet_cloner.py -v`
+Expected: 3 passed (2 existing + 1 new), confirming no regression on the non-spill DiffLag/Position Model cases.
+
+- [ ] **Step 5: Save checkpoint**
+
 ---
 
 ### Task 8: Notes and Data sheets
@@ -908,11 +1029,23 @@ Expected: 2 passed
 
 ### Task 11: Johansen_Monthly sheet with the dynamic Active-End-Row fix
 
+**Verified live-workbook structure (read via openpyxl, read-only) that this task's design depends on:**
+- `A2` = `ArrayFormula` spill anchor: `=FILTER(DiffLag!$B$2:$B$1048576,DiffLag!$B$2:$B$1048576<>"")` — compacts DiffLag's Date column (removing blanks); header `A1` = "Date".
+- `B2` = a genuine per-row formula: `=IF(MONTH(A2)<>MONTH(A3), ROW(A2)+ROW(DiffLag!B3)-ROW(A2)-1, "")` — a month-boundary detector, blank except at month-end rows; header `B1` = "EndRow".
+- `C2`/`D2` = `=Johansen!D18` / `=Johansen!D19` — fixed (non-relative, despite lacking `$`) lookups of the *current* live Johansen eigenvector weight; populated at row 2 only, blank elsewhere. Headers `C1`/`D1` = "BOHO_Weight"/"D4_Weight".
+- `F2`/`G2` = `ArrayFormula` spill anchors: `=FILTER(B:B, B:B<>"")` / `=FILTER(A:A, B:B<>"")` — compact column B's sparse month-end markers and column A's dates into a dense, contiguous month-end log (this is what the live `Active End Row` pointer, `=F69`, resolves against).
+- `H2`/`I2` = **literal text** `"BOHO_Weight"` / `"D4_Weight"` (not formulas) — a second header pair, one row below A1:D1, labeling the log table's weight columns.
+- `H3:I69` (as of this project's writing) hold **literal historical numbers**, not formulas — this is a manually-maintained, walk-forward record: each month, a human re-runs the Johansen calc for that month's window and pastes the resulting weight pair into the next log row. There is no formula that reproduces this, by design (see Notes sheet philosophy — same category as pasted price history).
+- `K1` = blank; `K2` = label text `"Active End Row"`; `K3` = the pointer formula (live: `=F69`).
+
+**Design consequence:** only column B is a genuine "fill down every row" pattern. A/F/G are spill anchors (write once, preserve as `ArrayFormula`). C/D are fixed single-row lookups (write once at row 2, unshifted — they must NOT go through the generic per-row shifter, since `shift_formula_rows` would incorrectly treat `D18`/`D19` as relative row references and shift them to `D19`/`D20` at row 3, `D20`/`D21` at row 4, etc., corrupting a reference that is semantically fixed). H/I get header labels only — no synthetic history is fabricated; the log rows below the header are left empty for the workflow described in Notes to fill in going forward.
+
 **Files:**
 - Create: `scripts/build_johansen_monthly.py`
 - Test: `scripts/tests/test_build_johansen_monthly.py`
 
 **Interfaces:**
+- Consumes: `fill_sheet_from_pattern` (Task 7, including its Addendum's spill-anchor handling — this task is the reason that addendum exists).
 - Produces: `write_johansen_monthly_sheet(wb, source_path, num_rows=3000)`.
 
 - [ ] **Step 1: Write the failing test**
@@ -920,6 +1053,7 @@ Expected: 2 passed
 ```python
 # scripts/tests/test_build_johansen_monthly.py
 import openpyxl, pathlib
+from openpyxl.worksheet.formula import ArrayFormula
 from build_johansen_monthly import write_johansen_monthly_sheet
 
 SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").read_text().strip()
@@ -932,15 +1066,48 @@ def test_active_end_row_is_dynamic_not_hardcoded():
     assert formula != "=F69"
     assert "LOOKUP(2,1/(" in formula
     assert "F:F" in formula  # resolves against the log table's own F column
+    assert ws["K2"].value == "Active End Row"  # label sits at K2, not K1, per the live file
 
-def test_headers_and_array_formula_present():
+def test_headers_present():
     wb = openpyxl.Workbook()
     write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
     ws = wb["Johansen_Monthly"]
     assert ws["A1"].value == "Date"
     assert ws["B1"].value == "EndRow"
-    a2 = ws["A2"].value
-    assert "FILTER" in a2
+    assert ws["H2"].value == "BOHO_Weight"
+    assert ws["I2"].value == "D4_Weight"
+
+def test_spill_anchors_are_array_formulas_written_once():
+    wb = openpyxl.Workbook()
+    write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Johansen_Monthly"]
+    for col in ("A", "F", "G"):
+        cell = ws[f"{col}2"].value
+        assert isinstance(cell, ArrayFormula), f"{col}2 should be a spill anchor"
+        assert "FILTER(" in cell.text
+        # Must not be duplicated into later rows.
+        for row in range(3, 12):
+            assert ws[f"{col}{row}"].value is None, f"{col}{row} should be empty"
+
+def test_c_and_d_are_fixed_single_row_lookups_not_shifted():
+    wb = openpyxl.Workbook()
+    write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Johansen_Monthly"]
+    assert ws["C2"].value == "=Johansen!D18"
+    assert ws["D2"].value == "=Johansen!D19"
+    # Must NOT be shifted to D19/D20 etc. at later rows — and must not be
+    # duplicated at all, since this is a single current-value lookup.
+    for row in range(3, 12):
+        assert ws[f"C{row}"].value is None
+        assert ws[f"D{row}"].value is None
+
+def test_h_i_history_rows_left_empty_no_fabricated_data():
+    wb = openpyxl.Workbook()
+    write_johansen_monthly_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Johansen_Monthly"]
+    for row in range(3, 12):
+        assert ws[f"H{row}"].value is None
+        assert ws[f"I{row}"].value is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -952,8 +1119,11 @@ Expected: FAIL with `ModuleNotFoundError`
 
 ```python
 # scripts/build_johansen_monthly.py
+import openpyxl
+from openpyxl.worksheet.formula import ArrayFormula
 from sheet_cloner import fill_sheet_from_pattern
 from config_map import CONSTANT_MAP
+from formula_tools import rewrite_constants
 
 HEADERS = ["Date", "EndRow", "BOHO_Weight", "D4_Weight"]
 
@@ -964,6 +1134,10 @@ def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> 
     ws = wb.create_sheet("Johansen_Monthly")
     for i, h in enumerate(HEADERS, start=1):
         ws.cell(row=1, column=i, value=h)
+
+    # Only column B (max_col=2) is a genuine per-row fill pattern; column A is a
+    # spill anchor and is handled automatically by fill_sheet_from_pattern's
+    # array-formula detection (Task 7 Addendum) within this same call.
     fill_sheet_from_pattern(
         target_ws=ws,
         source_path=source_path,
@@ -971,19 +1145,46 @@ def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> 
         pattern_row=2,
         target_start_row=2,
         num_rows=num_rows,
-        max_col=4,
+        max_col=2,
         constant_map=CONSTANT_MAP,
     )
-    ws["K1"] = "Active End Row"
-    # Self-updating last-row lookup, replacing Dec's hardcoded "=F69":
-    # finds the last row in column F (the month-end log) that is non-blank.
+
+    # C2/D2: fixed single-row lookups of the current live Johansen weight.
+    # Written once, unshifted — these lack $ anchors but are NOT row-relative
+    # (Johansen!D18/D19 are fixed eigenvector-result cells), so they must bypass
+    # the generic per-row shifter entirely rather than being shifted per row.
+    source_wb = openpyxl.load_workbook(source_path, data_only=False)
+    try:
+        src = source_wb["Johansen_Monthly"]
+        ws["C2"] = rewrite_constants(src["C2"].value, CONSTANT_MAP)
+        ws["D2"] = rewrite_constants(src["D2"].value, CONSTANT_MAP)
+
+        # F2/G2: spill anchors (month-end log compaction), same treatment as
+        # column A — preserve as real ArrayFormula objects, written once.
+        for col in ("F", "G"):
+            cell = src[f"{col}2"]
+            ws[f"{col}2"] = ArrayFormula(ref=f"{col}2", text=cell.value.text)
+    finally:
+        source_wb.close()
+
+    # H2/I2: literal header labels for the log table (not formulas, matches
+    # the live file exactly). Rows below are deliberately left empty — this
+    # log is a manually-maintained, walk-forward history with no formula that
+    # reproduces it (same category as the Data sheet's pasted price history).
+    ws["H2"] = "BOHO_Weight"
+    ws["I2"] = "D4_Weight"
+
+    ws["K2"] = "Active End Row"
+    # Self-updating last-row lookup, replacing Dec's hardcoded "=F69": finds
+    # the last row in column F (the month-end log) that is non-blank. This
+    # now resolves correctly because F is a real spill anchor, not empty.
     ws["K3"] = '=LOOKUP(2,1/(F:F<>""),F:F)'
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd scripts && py -m pytest tests/test_build_johansen_monthly.py -v`
-Expected: 2 passed
+Expected: 5 passed
 
 - [ ] **Step 5: Save checkpoint**
 
