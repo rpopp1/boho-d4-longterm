@@ -53,8 +53,19 @@ def fill_sheet_from_pattern(
             if col_letter in spill_cols:
                 if i == 0:
                     original = raw_array_formulas[col_letter]
+                    # The ref MUST span more than one cell, or Excel treats this as a
+                    # legacy CSE array formula scoped to a single cell (returning only
+                    # the top-left element) instead of a modern dynamic-array spill
+                    # that recalculates its own true extent — confirmed via Task 15's
+                    # validation, which caught this as a single-cell ref producing
+                    # #N/A everywhere downstream. The exact end row doesn't need to
+                    # match the eventual real data extent; Excel recomputes the true
+                    # spill size on full recalculation as long as ref is recognized
+                    # as a genuine multi-cell dynamic array to begin with.
+                    end_row = target_start_row + max(num_rows, 2) - 1
+                    ref = f"{col_letter}{target_start_row}:{col_letter}{end_row}"
                     target_ws[f"{col_letter}{target_start_row}"] = ArrayFormula(
-                        ref=f"{col_letter}{target_start_row}", text=original.text
+                        ref=ref, text=original.text
                     )
                 continue
             if isinstance(value, str) and value.startswith("="):
