@@ -40,30 +40,18 @@ def test_fill_position_model_rewrites_constants():
     assert "$DV$6" not in m_formula
     assert "ZExitThreshold" in m_formula
 
-def test_fill_does_not_duplicate_array_formula_spill_anchor():
+def test_fill_raises_clearly_on_array_formula_instead_of_silently_corrupting():
     wb = openpyxl.Workbook()
     ws = wb.active
-    fill_sheet_from_pattern(
-        target_ws=ws,
-        source_path=SOURCE_PATH,
-        source_sheet="Johansen_Monthly",
-        pattern_row=2,
-        target_start_row=2,
-        num_rows=10,
-        max_col=1,  # column A only — the FILTER spill anchor
-        constant_map=CONSTANT_MAP,
-    )
-    from openpyxl.worksheet.formula import ArrayFormula
-    a2 = ws["A2"].value
-    assert isinstance(a2, ArrayFormula)
-    assert "FILTER(DiffLag!$B$2:$B$1048576" in a2.text
-    # ref MUST span more than one cell — a single-cell ref makes Excel treat this
-    # as a legacy CSE array formula (returns only the first value) instead of a
-    # real dynamic-array spill. This exact defect was caught by Task 15's Dec
-    # replay validation (silent #N/A cascade), so this assertion guards against
-    # regressing it.
-    assert a2.ref == "A2:A11"
-    # Every other target row must be left untouched — writing the same spill
-    # anchor into A3..A11 would corrupt the file with #SPILL! errors in Excel.
-    for row in range(3, 12):
-        assert ws[f"A{row}"].value is None
+    import pytest
+    with pytest.raises(NotImplementedError, match="dynamic-array"):
+        fill_sheet_from_pattern(
+            target_ws=ws,
+            source_path=SOURCE_PATH,
+            source_sheet="Johansen_Monthly",
+            pattern_row=2,
+            target_start_row=2,
+            num_rows=10,
+            max_col=1,  # column A only — was a FILTER spill anchor as of this writing
+            constant_map=CONSTANT_MAP,
+        )

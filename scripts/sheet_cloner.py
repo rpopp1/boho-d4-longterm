@@ -33,41 +33,25 @@ def fill_sheet_from_pattern(
 ) -> None:
     pattern = extract_row_formulas(source_path, source_sheet, pattern_row, max_col)
     spill_cols = _get_array_formula_columns(source_path, source_sheet, pattern_row, max_col)
-    # Re-read the raw ArrayFormula objects for spill columns so the written-out
-    # cell keeps its real type (a plain string would not spill correctly in Excel).
-    raw_array_formulas = {}
     if spill_cols:
-        wb = openpyxl.load_workbook(source_path, data_only=False)
-        try:
-            ws = wb[source_sheet]
-            for col_letter in spill_cols:
-                cell = ws[f"{col_letter}{pattern_row}"]
-                raw_array_formulas[col_letter] = cell.value
-        finally:
-            wb.close()
+        raise NotImplementedError(
+            f"Pattern row {pattern_row} of sheet '{source_sheet}' contains "
+            f"dynamic-array spill anchor formula(s) in column(s) {sorted(spill_cols)}. "
+            "openpyxl cannot reliably reproduce Excel's dynamic-array spill "
+            "semantics (no supported way to write the cm=\"1\" cell-metadata "
+            "Excel needs to recognize a true auto-resizing spill, vs. a "
+            "legacy fixed-size CSE array formula that pads excess cells with "
+            "#N/A) — this exact failure mode was found and traced by Task 15's "
+            "Dec-replay validation. Redesign the sheet builder to avoid spill "
+            "formulas entirely (e.g. a plain per-row mirror formula, or a "
+            "manually-maintained column) rather than special-casing this here "
+            "— see Task 11 v2's redesign of Johansen_Monthly for the pattern."
+        )
 
     for i in range(num_rows):
         target_row = target_start_row + i
         row_delta = target_row - pattern_row
         for col_letter, value in pattern.items():
-            if col_letter in spill_cols:
-                if i == 0:
-                    original = raw_array_formulas[col_letter]
-                    # The ref MUST span more than one cell, or Excel treats this as a
-                    # legacy CSE array formula scoped to a single cell (returning only
-                    # the top-left element) instead of a modern dynamic-array spill
-                    # that recalculates its own true extent — confirmed via Task 15's
-                    # validation, which caught this as a single-cell ref producing
-                    # #N/A everywhere downstream. The exact end row doesn't need to
-                    # match the eventual real data extent; Excel recomputes the true
-                    # spill size on full recalculation as long as ref is recognized
-                    # as a genuine multi-cell dynamic array to begin with.
-                    end_row = target_start_row + max(num_rows, 2) - 1
-                    ref = f"{col_letter}{target_start_row}:{col_letter}{end_row}"
-                    target_ws[f"{col_letter}{target_start_row}"] = ArrayFormula(
-                        ref=ref, text=original.text
-                    )
-                continue
             if isinstance(value, str) and value.startswith("="):
                 shifted = shift_formula_rows(value, row_delta)
                 rewritten = rewrite_constants(shifted, constant_map)
