@@ -255,13 +255,43 @@ def test_dynamic_year_breakdown_produces_genuine_per_year_pnl_sums():
     # MAJOR 4: the real per-year PnL totals (Dec's CQ-CU / CE-CJ) must now be
     # produced via SUMIFS keyed on this sheet's own Year column (CO), not by
     # literally copying Dec's per-year columns.
+    #
+    # targeted-fix-round-2, finding 5: the range bound must be the sheet's
+    # own actual last row (num_rows=300 -> last_target_row=301), not a
+    # hardcoded "3000" -- the old hardcode silently excluded row 3001
+    # whenever num_rows was 3000, and would have been wrong here too.
     wb = openpyxl.Workbook()
     write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
     ws = wb["Position Model"]
     ee3 = ws["EE3"].value
-    assert ee3 == "=SUMIFS($BK$3:$BK$3000,$CO$3:$CO$3000,DZ3)"
+    assert ee3 == "=SUMIFS($BK$3:$BK$301,$CO$3:$CO$301,DZ3)"
     ef3 = ws["EF3"].value
-    assert ef3 == "=SUMIFS($BT$3:$BT$3000,$CO$3:$CO$3000,DZ3)"
+    assert ef3 == "=SUMIFS($BT$3:$BT$301,$CO$3:$CO$301,DZ3)"
+
+
+def test_dynamic_year_breakdown_peak_trough_range_columns():
+    # targeted-fix-round-2, finding 2: EG/EH/EI (Peak/Trough/Range) replace
+    # Dec's decommissioned DJ224:DN227 (MAX/MIN over the now-gone CQ-CU
+    # fixed-row-window columns), via MAXIFS/MINIFS over CP ("Calendar Year
+    # Cumulative PnL") keyed on this sheet's own Year column.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    assert ws["EG2"].value == "Peak"
+    assert ws["EH2"].value == "Trough"
+    assert ws["EI2"].value == "Range"
+    assert ws["EG3"].value == "=MAXIFS($CP$3:$CP$301,$CO$3:$CO$301,DZ3)"
+    assert ws["EH3"].value == "=MINIFS($CP$3:$CP$301,$CO$3:$CO$301,DZ3)"
+    assert ws["EI3"].value == "=ABS(EG3-EH3)"
+
+
+def test_dz2_has_header_label():
+    # targeted-fix-round-2, finding 5: EA2:EF2 (now EI2) had labels but DZ2
+    # (the year column's own header) did not.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Position Model"]
+    assert ws["DZ2"].value == "Year"
 
 
 def test_non_self_referencing_drawdown_columns_are_untouched():
@@ -273,3 +303,99 @@ def test_non_self_referencing_drawdown_columns_are_untouched():
     ws = wb["Position Model"]
     assert ws["CM3"].value == "=CK3-CL3"
     assert ws["BX21"].value == "=BV21-BW21"
+
+
+def test_generalized_trailing_window_accum_cols_no_longer_bootstrap_at_dec_row_741():
+    # targeted-fix-round-2, finding 1: BZ/CA/CB/CC used to be a BOOT_END
+    # entry keyed to Dec's real row 741 (Dec's own "2024 calendar year
+    # boundary"), which baked a Dec-specific calendar boundary into the
+    # template's BOOT_END table. They are now ordinary since-inception
+    # accumulators, byte-for-byte the same formula SHAPE as BV/BW/BX/BY
+    # (both driven by BT), anchored to row 2 (literal 0 boundary) / row 3
+    # onward instead of Dec's row 740/741.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
+    ws = wb["Position Model"]
+    assert ws["BZ2"].value == 0
+    assert ws["CA2"].value == 0
+    assert ws["CB2"].value == 0
+    assert ws["CC2"].value == 0
+    # BZ/CA/CC self-reference the immediately preceding row and must be
+    # IFERROR-wrapped (ACCUM_SELF_REF_COLS); CB is not self-referencing.
+    assert ws["BZ3"].value == "=IFERROR(BZ2,0)+BT3"
+    assert ws["CA3"].value == "=MAX(BZ3,IFERROR(CA2,0))"
+    assert ws["CB3"].value == "=BZ3-CA3"
+    assert ws["CC3"].value == "=MIN(CB3,IFERROR(CC2,0))"
+    # Formula must never contain Dec's row-740/741 boundary anywhere.
+    for row in range(3, 31):
+        for col in ("BZ", "CA", "CB", "CC"):
+            v = ws[f"{col}{row}"].value
+            assert "740" not in str(v) and "741" not in str(v)
+
+
+def test_dg49_dh49_are_dynamic_not_hardcoded_row_1386():
+    # targeted-fix-round-2, finding 1: DG49/DH49 hardcoded Dec's own real
+    # last data row (1386, ='=$CC$1386'/'=$CA$1386'). Made dynamic via a
+    # "last non-blank cell" LOOKUP, tested against Data!$A (see
+    # test_lookup_idiom_tests_data_a_not_the_self_referencing_column for why
+    # not the self-referencing column itself, as Johansen_Monthly!K3 does).
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    dg49 = ws["DG49"].value
+    dh49 = ws["DH49"].value
+    assert "1386" not in dg49
+    assert "1386" not in dh49
+    assert "LOOKUP(2,1/(" in dg49 and "$CC$" in dg49
+    assert "LOOKUP(2,1/(" in dh49 and "$CA$" in dh49
+
+
+def test_lookup_idiom_tests_data_a_not_the_self_referencing_column():
+    # targeted-fix-round-2 (surfaced while verifying finding 1's fix against
+    # real Excel recalculation): a "last non-blank cell in column X" LOOKUP
+    # is only safe when tested against a column that genuinely goes blank
+    # once real data runs out. Position Model's own per-day columns (BV/BW/
+    # BY/CC/CA) are filled with real FORMULAS all the way to the sheet's row
+    # capacity regardless of how much real data was pasted, and a formula
+    # referencing blank upstream Data returns 0 (not ""), so testing
+    # blankness against the column ITSELF is contaminated by padding rows.
+    # Data!$A (the actual pasted Date column) has no formula at all past the
+    # real data, so it is genuinely blank there. Covers both the
+    # pre-existing DE43/DF43/DF46 (BV/BW/BY) lookups and the new DG49/DH49.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    for coord, target_col in (("DE43", "BV"), ("DF43", "BW"), ("DF46", "BY"), ("DG49", "CC"), ("DH49", "CA")):
+        formula = ws[coord].value
+        assert "Data!$A$" in formula, f"{coord}: {formula!r}"
+        assert f"${target_col}${target_col}" not in formula  # not self-testing blankness
+        assert f"${target_col}$3:${target_col}$301" in formula
+
+
+def test_bn6_dq10_use_defined_names_not_bare_literals():
+    # targeted-fix-round-2, finding 5: BN6 (='=BN4*(7.5/100)-BN5') and DQ10
+    # (='=-65000*DQ11') embed raw numeric literals directly in formula text
+    # rather than as a reference to the parameter cell that already holds
+    # the same value -- rewrite_constants()/CONSTANT_MAP can never catch
+    # this (it only replaces address TOKENS, not bare numbers). Rewritten
+    # directly to reference the existing defined names.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
+    ws = wb["Position Model"]
+    assert ws["BN6"].value == "=BN4*(ZLMultiplier/100)-BN5"
+    assert ws["DQ10"].value == "=StopLossUSD_Base*DQ11"
+
+
+def test_dj224_dn227_dangling_cq_cu_refs_are_cleared_not_leaking_zero():
+    # targeted-fix-round-2, finding 2: DJ224:DN227 used to be
+    # MAX/MIN(CQ2:CQ253)-style formulas over the now-decommissioned CQ-CU
+    # columns -- with CQ-CU cleared to blank, MAX/MIN of an all-blank range
+    # silently evaluates to 0 instead of loudly failing. These specific
+    # cells are cleared entirely (see EG/EH/EI in the dynamic year-breakdown
+    # table for the genuine general equivalent).
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
+    ws = wb["Position Model"]
+    for col in ("DJ", "DK", "DL", "DM", "DN"):
+        for row in (224, 225, 227):
+            assert ws[f"{col}{row}"].value is None
