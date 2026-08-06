@@ -372,7 +372,10 @@ def test_rewrite_leaves_unmapped_addresses_untouched():
     assert rewrite_constants(formula, CONSTANT_MAP) == "=Data!A2"
 
 def test_rewrite_multiple_constants_in_one_formula():
-    formula = "=S2*($Z2*$DK$2-$AA2*$DK$5)"
+    # $DK$5 is HOGalPerContract per Task 4's reconciled map (confirmed against the
+    # live workbook's real labels); $DK$2 is a distinct constant (ZLCentsPerLB),
+    # so this test uses $DK$5 twice to exercise multi-occurrence rewriting.
+    formula = "=S2*($Z2*$DK$5-$AA2*$DK$5)"
     result = rewrite_constants(formula, CONSTANT_MAP)
     assert result == "=S2*($Z2*HOGalPerContract-$AA2*HOGalPerContract)"
 ```
@@ -829,7 +832,7 @@ def test_matrices_window_length_uses_config_name():
     wb = openpyxl.Workbook()
     write_matrices_sheet(wb, SOURCE_PATH)
     ws = wb["Matrices"]
-    assert ws["C3"].value == "=JohansenWindowLen"
+    assert ws["B3"].value == "=JohansenWindowLen"
     assert ws["B2"].value == "=Johansen_Monthly!$K$3"
 
 def test_johansen_sheet_replicated():
@@ -866,7 +869,10 @@ def write_matrices_sheet(wb, source_path: str) -> None:
                 continue
             ws[cell.coordinate] = cell.value
     # Structural template-specific overrides:
-    ws["C3"] = "=JohansenWindowLen"          # was the literal 63
+    # Task 4's reconciled config_map.py confirmed the real window-length cell is
+    # B3 (label "Window Length (rows)" sits at A3), not C3 — C3 is empty in the
+    # live workbook. Use the corrected address.
+    ws["B3"] = "=JohansenWindowLen"          # was the literal 63
     ws["B2"] = "=Johansen_Monthly!$K$3"       # unchanged reference target, now resolved dynamically there
     for row in ws.iter_rows(min_row=1, max_row=53, max_col=8):
         for cell in row:
