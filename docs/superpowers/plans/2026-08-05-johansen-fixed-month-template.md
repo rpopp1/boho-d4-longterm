@@ -854,7 +854,7 @@ Expected: FAIL with `ModuleNotFoundError`
 # scripts/build_matrices_johansen.py
 import openpyxl
 from formula_tools import extract_row_formulas, rewrite_constants
-from config_map import CONSTANT_MAP
+from config_map import CONSTANT_MAP, MATRICES_ONLY_CONSTANT_MAP
 
 
 def write_matrices_sheet(wb, source_path: str) -> None:
@@ -874,10 +874,15 @@ def write_matrices_sheet(wb, source_path: str) -> None:
     # live workbook. Use the corrected address.
     ws["B3"] = "=JohansenWindowLen"          # was the literal 63
     ws["B2"] = "=Johansen_Monthly!$K$3"       # unchanged reference target, now resolved dynamically there
+    # MATRICES_ONLY_CONSTANT_MAP (e.g. "$B$3") is deliberately excluded from the
+    # generic CONSTANT_MAP passed to the per-day sheet cloner (Task 7) because its
+    # keys are too generic/short to safely blind-substitute across other sheets'
+    # formulas. It is only ever merged in here, scoped to this sheet's own formulas.
+    matrices_map = {**CONSTANT_MAP, **MATRICES_ONLY_CONSTANT_MAP}
     for row in ws.iter_rows(min_row=1, max_row=53, max_col=8):
         for cell in row:
             if isinstance(cell.value, str) and cell.value.startswith("="):
-                cell.value = rewrite_constants(cell.value, CONSTANT_MAP)
+                cell.value = rewrite_constants(cell.value, matrices_map)
 
 
 def write_johansen_sheet(wb, source_path: str) -> None:
