@@ -5,7 +5,7 @@ import openpyxl
 import win32com.client
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.datetime import to_excel
-from config_map import CONFIG_LAYOUT
+from config_map import CONFIG_FIELDS
 from build_position_model import (
     PARAM_BLOCK_COLS, DECOMMISSIONED_PER_YEAR_COLS, YEAR_BREAKDOWN_COLS,
     GENERALIZED_TRAILING_WINDOW_ACCUM_COLS,
@@ -166,7 +166,12 @@ def _populate_throwaway_copy(template_path: str, dec_source_path: str, throwaway
     shutil.copy(template_path, throwaway_path)
     wb = openpyxl.load_workbook(throwaway_path, data_only=False)
     config_ws = wb["Config"]
-    layout_by_name = {name: cell for name, cell, _default in CONFIG_LAYOUT}
+    # NOTE (multi-month Task 11): config_map.CONFIG_LAYOUT (single shared
+    # column B + hardcoded "B7"-style cell addresses) was removed once every
+    # builder migrated to the per-month CONFIG_FIELDS. This preserves the exact
+    # previous behavior (column B) as a placeholder only; Task 13 repoints this
+    # whole function at December's own Config column and data block.
+    layout_by_name = {name: f"B{row}" for name, row, _default in CONFIG_FIELDS}
     for name, value in DEC_LIVE_VALUES.items():
         cell = layout_by_name[name]
         config_ws[cell] = value

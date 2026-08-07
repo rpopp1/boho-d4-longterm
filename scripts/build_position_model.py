@@ -4,8 +4,15 @@ import openpyxl
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 from sheet_cloner import fill_sheet_from_pattern
-from config_map import CONSTANT_MAP
-from formula_tools import extract_row_formulas, rewrite_constants, shift_formula_rows, unwrap_scalar_array_formula
+from config_map import constant_map_for_month
+from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP
+from formula_tools import (
+    extract_row_formulas,
+    rewrite_constants,
+    shift_formula_columns,
+    shift_formula_rows,
+    unwrap_scalar_array_formula,
+)
 
 # ---------------------------------------------------------------------------
 # Independent verification (see task-12-report.md for full methodology and
@@ -199,10 +206,13 @@ ACCUM_SELF_REF_COLS = (
 GENERALIZED_TRAILING_WINDOW_ACCUM_COLS = ("BZ", "CA", "CB", "CC")
 
 
-def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_col: int = None) -> None:
-    if "Position Model" in wb.sheetnames:
-        del wb["Position Model"]
-    ws = wb.create_sheet("Position Model")
+def write_position_model_sheet(wb, source_path: str, month: str, num_rows: int = 3000, max_col: int = None) -> None:
+    sheet_name = f"Position Model - {month}"
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name)
+
+    constant_map = constant_map_for_month(month)
 
     source_wb = openpyxl.load_workbook(source_path, data_only=False)
     try:
@@ -230,7 +240,7 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
                 target_start_row=3,
                 num_rows=num_rows - 1,
                 max_col=max_col,
-                constant_map=CONSTANT_MAP,
+                constant_map=constant_map,
             )
 
         # Row 2 filled from its own literal Dec pattern (boundary row, not
@@ -238,7 +248,7 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
         row2 = extract_row_formulas(source_path, "Position Model", row=2, max_col=max_col)
         for col_letter, value in row2.items():
             if isinstance(value, str) and value.startswith("="):
-                value = rewrite_constants(value, CONSTANT_MAP)
+                value = rewrite_constants(value, constant_map)
             ws.cell(row=2, column=column_index_from_string(col_letter), value=value)
 
         # Fix up BOOTSTRAP columns: rows 3..(boot_end-1) copied literally
@@ -257,7 +267,7 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
                 # into the new sheet as an ArrayFormula object.
                 value = unwrap_scalar_array_formula(cell.value, cell.coordinate)
                 if isinstance(value, str) and value.startswith("="):
-                    value = rewrite_constants(value, CONSTANT_MAP)
+                    value = rewrite_constants(value, constant_map)
                 # CRITICAL 3-class fix: ws.cell(row, column, value=None) is a
                 # no-op in openpyxl (only assigns when value is not None) --
                 # must set .value directly, or wherever the source's
@@ -281,7 +291,7 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
                     for row in range(boot_end, last_target_row + 1):
                         delta = row - boot_end
                         shifted = shift_formula_rows(pattern_value, delta)
-                        rewritten = rewrite_constants(shifted, CONSTANT_MAP)
+                        rewritten = rewrite_constants(shifted, constant_map)
                         ws.cell(row=row, column=col_idx, value=rewritten)
                 else:
                     ws.cell(row=boot_end, column=col_idx, value=pattern_value)
@@ -311,7 +321,7 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
                 # in DE/DF, both PARAM_BLOCK_COLS columns).
                 value = unwrap_scalar_array_formula(cell.value, cell.coordinate)
                 if isinstance(value, str) and value.startswith("="):
-                    value = rewrite_constants(value, CONSTANT_MAP)
+                    value = rewrite_constants(value, constant_map)
                 ws.cell(row=row, column=col_idx).value = value
 
         # MAJOR 4 / CRITICAL 3: fully decommission the hardcoded per-year PnL
@@ -332,6 +342,13 @@ def write_position_model_sheet(wb, source_path: str, num_rows: int = 3000, max_c
     _apply_targeted_fix_round_2_overrides(ws, last_target_row, max_col)
     _wrap_accumulator_self_references(ws, last_target_row)
     _write_dynamic_year_breakdown(ws, last_target_row)
+
+    data_offset = column_offset(month, DATA_BLOCK_WIDTH, GAP)
+    jm_offset = column_offset(month, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP)
+    _relocate_cross_sheet_references(
+        ws, last_target_row, max_col,
+        sheet_map={"Data": (data_offset, "Data"), "Johansen_Monthly": (jm_offset, "Johansen_Monthly")},
+    )
 
 
 def _write_generalized_trailing_window_accum_cols(ws, last_target_row: int, max_col: int) -> None:
@@ -581,3 +598,29 @@ def _write_dynamic_year_breakdown(ws, last_target_row: int = 3001) -> None:
             # (it only assigns when value is not None) -- must set .value
             # directly to actually clear a previously-written cell.
             ws.cell(row=row, column=col_idx).value = None
+
+
+def _relocate_cross_sheet_references(ws, last_target_row: int, max_col: int, sheet_map: dict) -> None:
+    """Position Model tabs are never column-shifted themselves (each is a
+    full standalone sheet starting at column A, exactly like today's
+    single-month template) -- only their CROSS-sheet references need
+    relocating, to whichever column-block this month's Data/Johansen_Monthly
+    live at. Read-only inspection of the live source workbook confirmed
+    Position Model references no other sheet directly (not DiffLag, not
+    Matrices/Johansen/Results, not Monthly Beta -- nothing references Monthly
+    Beta from anywhere in the workbook), so sheet_map only ever needs "Data"
+    and "Johansen_Monthly" keys, and deliberately has no None key: Position
+    Model's own internal self-references (the accumulator columns, the
+    dynamic year breakdown, etc.) must never be touched by this pass.
+
+    A blanket full-sheet scan, not a targeted one, on purpose -- consistent
+    with this project's established preference for an opt-out validation
+    surface over an opt-in one (see docs/superpowers/HANDOFF.md's "hard-won
+    gotchas"): safer to check every cell than to guess which columns might
+    contain a cross-sheet reference.
+    """
+    for row in ws.iter_rows(min_row=1, max_row=last_target_row, max_col=max_col):
+        for cell in row:
+            value = cell.value
+            if isinstance(value, str) and value.startswith("="):
+                cell.value = shift_formula_columns(value, sheet_map)

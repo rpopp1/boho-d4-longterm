@@ -119,16 +119,51 @@ def unwrap_scalar_array_formula(value, coordinate: str):
 
 _SHEET_QUALIFIER = r"(?:'(?P<qname>[^']+)'|(?P<uname>[A-Za-z_][A-Za-z0-9_.]*))!"
 
+# NOTE (multi-month Task 11): the reference body below is deliberately matched
+# as ONE unit -- an optional sheet qualifier followed by either a single cell,
+# a cell:cell range, or a full-column col:col range, each side independently
+# `$`-anchorable. Two real defects, both found while wiring up Position
+# Model's cross-sheet relocation pass, are why it is shaped this way rather
+# than as two narrow alternatives:
+#
+#   1. "$G:$G" (an ANCHORED full-column range) did not match the old
+#      full-column alternative at all (it required bare "G:G"), so
+#      shift_formula_columns SILENTLY returned the whole formula unchanged for
+#      Position Model!I2's "LOOKUP($A2-1, Johansen_Monthly!$G:$G,
+#      Johansen_Monthly!$H:$H)" -- every month's Position Model tab would have
+#      kept reading January's Johansen_Monthly walk-forward log (columns
+#      G/H/I) instead of its own. Caught by
+#      test_position_model_march_johansen_monthly_reference_relocated.
+#
+#   2. "Data!$A$3:$A$301" was matched as TWO separate references, and only the
+#      first one carried the "Data!" qualifier -- the second endpoint's
+#      qualifier is implicit in Excel, so it looked unqualified, was not a
+#      sheet_map key, and was left unshifted. That produced the actively
+#      CORRUPT "Data!$W$3:$A$301" (a range spanning from December's block back
+#      to January's) rather than merely an unshifted formula. Position Model's
+#      DE43/DF43/DF46/DG49/DH49 "last non-blank row" LOOKUPs use exactly this
+#      shape, so this was a live corruption, not a hypothetical one. Matching
+#      the whole range as one body makes the qualifier apply to both endpoints,
+#      as Excel itself does.
+#
+# A read-only scan of the live source workbook found $-anchored full-column
+# refs in exactly three places, all of them the same Johansen_Monthly!$G/$H/$I
+# LOOKUP idiom (Position Model!I2, Johansen_Monthly!O3, Spread!D2); only
+# Position Model's copy is reproduced by any builder, so no already-migrated
+# sheet's output changes as a result of these fixes.
+_CELL = r"\$?[A-Za-z]{1,3}\$?\d+"
+_REF_BODY = r"(?:" + _CELL + r"(?::" + _CELL + r")?" + r"|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3})"
+
 _COL_REF_RE = re.compile(
     r"(?<![A-Za-z0-9_])"
     r"(?:" + _SHEET_QUALIFIER + r")?"
-    r"(?:"
-    r"(?P<colabs>\$)?(?P<col>[A-Za-z]{1,3})(?P<rowabs>\$)?(?P<row>\d+)"
-    r"|"
-    r"(?P<fcol1>[A-Za-z]{1,3}):(?P<fcol2>[A-Za-z]{1,3})"
-    r")"
+    r"(?P<body>" + _REF_BODY + r")"
     r"(?![A-Za-z0-9_(])"
 )
+
+# Every column token inside a matched reference body: an optional "$" anchor
+# plus 1-3 letters. Row digits contain no letters, so they can never match.
+_BODY_COL_TOKEN_RE = re.compile(r"(\$?)([A-Za-z]{1,3})")
 
 _NEEDS_QUOTING_RE = re.compile(r"[^A-Za-z0-9_]")
 
@@ -158,7 +193,12 @@ def shift_formula_columns(formula: str, sheet_map: dict) -> str:
     shift_formula_rows). Column shifting here is applied exactly once per
     formula -- relocating a whole per-month block to its column position --
     so there is no "moving target" to protect against, and every column
-    reference into a relocated sheet must move, anchored or not.
+    reference into a relocated sheet must move, anchored or not. The $ anchors
+    themselves are preserved byte-for-byte in the output.
+
+    A ":"-range is matched as a single reference, so a qualifier on the left
+    endpoint applies to the right endpoint too (as Excel itself treats it) --
+    see _COL_REF_RE's note for the corruption that resulted from not doing so.
     """
     def _replace(match: "re.Match") -> str:
         sheet_key = match.group("qname") or match.group("uname")
@@ -167,14 +207,10 @@ def shift_formula_columns(formula: str, sheet_map: dict) -> str:
         col_delta, new_sheet = sheet_map[sheet_key]
         prefix = _qualify_sheet(new_sheet)
 
-        if match.group("col"):
-            colabs = match.group("colabs") or ""
-            rowabs = match.group("rowabs") or ""
-            new_col = get_column_letter(column_index_from_string(match.group("col")) + col_delta)
-            return f"{prefix}{colabs}{new_col}{rowabs}{match.group('row')}"
+        def _shift_token(token: "re.Match") -> str:
+            anchor, col = token.group(1), token.group(2)
+            return f"{anchor}{get_column_letter(column_index_from_string(col) + col_delta)}"
 
-        new_col1 = get_column_letter(column_index_from_string(match.group("fcol1")) + col_delta)
-        new_col2 = get_column_letter(column_index_from_string(match.group("fcol2")) + col_delta)
-        return f"{prefix}{new_col1}:{new_col2}"
+        return prefix + _BODY_COL_TOKEN_RE.sub(_shift_token, match.group("body"))
 
     return _COL_REF_RE.sub(_replace, formula)

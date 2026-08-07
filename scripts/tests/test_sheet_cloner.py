@@ -1,9 +1,13 @@
 import openpyxl
 from sheet_cloner import fill_sheet_from_pattern
-from config_map import CONSTANT_MAP
 import pathlib
 
 SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").read_text().strip()
+
+# These tests exist to verify fill_sheet_from_pattern's generic mechanism, not
+# config_map.py's specific content, so they use a small local dict rather than
+# importing the (now-removed) global CONSTANT_MAP.
+_TEST_CONSTANT_MAP = {"$DV$6": "ZExitThreshold", "$DK$5": "HOGalPerContract"}
 
 def test_fill_diff_lag_pattern_five_rows():
     wb = openpyxl.Workbook()
@@ -16,7 +20,7 @@ def test_fill_diff_lag_pattern_five_rows():
         target_start_row=2,
         num_rows=5,
         max_col=8,
-        constant_map=CONSTANT_MAP,
+        constant_map=_TEST_CONSTANT_MAP,
     )
     assert ws["B2"].value == '=IF(Data!B2="","",Data!A2)'
     assert ws["B3"].value == '=IF(Data!B3="","",Data!A3)'
@@ -34,7 +38,7 @@ def test_fill_position_model_rewrites_constants():
         target_start_row=3,
         num_rows=3,
         max_col=13,
-        constant_map=CONSTANT_MAP,
+        constant_map=_TEST_CONSTANT_MAP,
     )
     m_formula = ws["M4"].value
     assert "$DV$6" not in m_formula
@@ -53,7 +57,7 @@ def test_fill_raises_clearly_on_array_formula_instead_of_silently_corrupting():
             target_start_row=2,
             num_rows=10,
             max_col=1,  # column A only — was a FILTER spill anchor as of this writing
-            constant_map=CONSTANT_MAP,
+            constant_map=_TEST_CONSTANT_MAP,
         )
 
 def test_fill_with_column_shift_relocates_block_and_self_references():
@@ -67,7 +71,7 @@ def test_fill_with_column_shift_relocates_block_and_self_references():
         target_start_row=2,
         num_rows=3,
         max_col=8,
-        constant_map=CONSTANT_MAP,
+        constant_map=_TEST_CONSTANT_MAP,
         column_shift_map={None: (10, None), "Data": (5, "Data")},
     )
     # DiffLag's own column B (source: '=IF(Data!B2="","",Data!A2)') physically
@@ -94,6 +98,6 @@ def test_fill_without_column_shift_map_is_unchanged():
         target_start_row=2,
         num_rows=3,
         max_col=8,
-        constant_map=CONSTANT_MAP,
+        constant_map=_TEST_CONSTANT_MAP,
     )
     assert ws["B2"].value == '=IF(Data!B2="","",Data!A2)'

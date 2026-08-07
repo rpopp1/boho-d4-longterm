@@ -11,19 +11,23 @@ SOURCE_PATH = (pathlib.Path(__file__).parent.parent / "DEC_SOURCE_PATH.txt").rea
 
 def test_position_model_fills_and_rewrites_constants():
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
+    ws = wb["Position Model - January"]
     m4 = ws["M4"].value
     assert "$DV$6" not in m4
-    assert "ZExitThreshold" in m4
+    # Multi-month: constants now resolve to this month's own Config column
+    # (January = B) instead of a single workbook-scoped defined name.
+    assert "Config!B17" in m4
+    assert "ZExitThreshold" not in m4
     i3 = ws["I3"].value
+    # January's Johansen_Monthly offset is 0, so its columns are unshifted.
     assert "Johansen_Monthly!$G:$G" in i3
 
 
 def test_year_breakdown_is_dynamic_not_hardcoded_per_year():
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
+    ws = wb["Position Model - January"]
     # The old Dec pattern hardcoded literal row bounds like AH$2:AH$249 per calendar year.
     # The template's equivalent must key off the sheet's own Year column instead.
     year_formula = ws["EA3"].value
@@ -39,8 +43,8 @@ def test_no_array_formula_cells_in_rows_2_and_3():
     from openpyxl.worksheet.formula import ArrayFormula
 
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
+    ws = wb["Position Model - January"]
     for row in (2, 3):
         for col in range(1, ws.max_column + 1):
             assert not isinstance(ws.cell(row=row, column=col).value, ArrayFormula)
@@ -53,8 +57,8 @@ def test_bootstrap_columns_use_literal_rows_before_steady_state():
     # BC's real per-day steady-state formula only begins at row 20 in the live
     # workbook. Row 3 must be copied literally (unshifted), not row-shifted.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=25)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=25)
+    ws = wb["Position Model - January"]
     bc3 = ws["BC3"].value
     assert bc3 is not None
     assert "1268" in bc3 or "1269" in bc3
@@ -77,8 +81,8 @@ def test_year_breakdown_rows_beyond_3_have_no_leftover_dec_literals():
     # (see test_dynamic_year_breakdown_enumerates_multiple_years_plus_total).
     # What must never reappear is Dec's own literal fixed-row-bound formulas.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
+    ws = wb["Position Model - January"]
     for row in range(3, 12):
         for col in ("EA", "EB", "EC"):
             v = ws[f"{col}{row}"].value
@@ -93,8 +97,8 @@ def test_bootstrap_columns_reach_steady_state_row_shift():
     # workbook: '=IF($T19=0,0,-$T19*$AF20*$DM$3)' at row 20, shifting by +1 row
     # at a time. Confirm the built sheet reproduces this shifted pattern.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=25)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=25)
+    ws = wb["Position Model - January"]
     bc21 = ws["BC21"].value
     assert bc21 is not None
     assert "$T20" in bc21
@@ -110,8 +114,8 @@ def test_accumulator_self_references_are_iferror_wrapped():
     # self-reference to the previous row must be wrapped in IFERROR(...,0) so the
     # running total self-heals once real numbers exist again.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=30)
+    ws = wb["Position Model - January"]
 
     y3 = ws["Y3"].value
     assert y3 == "=IFERROR(Y2,0)+X3"
@@ -159,8 +163,8 @@ def test_additional_self_referencing_columns_caught_by_widened_validation_are_wr
     # BM/BO/BQ/BU trade-state-machine cluster (BL/BN/BP/BR/BS/BT are NOT
     # self-referencing themselves and resolve once these four are hardened).
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=30)
+    ws = wb["Position Model - January"]
 
     assert ws["CP3"].value == '=IF(CO3=CO2,IFERROR(CP2,0)+BK3,0)'
     assert ws["CD21"].value == '=IF(CO21=CO20,IFERROR(CD20,0)+BT21,0)'
@@ -181,8 +185,8 @@ def test_boot_end_literal_copy_clears_genuinely_blank_source_cells():
     # already shifted into those cells (a nonsensical shifted version of
     # BC's fixed-row-1268/1269 pattern) survived underneath.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=25)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=25)
+    ws = wb["Position Model - January"]
     for row in range(6, 20):
         assert ws[f"BC{row}"].value is None, f"BC{row} unexpectedly non-empty: {ws[f'BC{row}'].value!r}"
 
@@ -194,8 +198,8 @@ def test_param_block_cols_have_no_leftover_baseline_fill_beyond_source_extent():
     # DJ/DK/DL/DM/DN are only populated through row 227 in the live source;
     # nothing beyond that should survive in the built sheet at all.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     for col in ("DJ", "DK", "DL", "DM", "DN"):
         for row in (228, 250, 300, 301):
             assert ws[f"{col}{row}"].value is None, f"{col}{row} unexpectedly non-empty"
@@ -203,8 +207,8 @@ def test_param_block_cols_have_no_leftover_baseline_fill_beyond_source_extent():
 
 def test_param_block_cols_still_copy_their_real_populated_extent():
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     # DK1 is a real literal constant (750000) in the live source's param block.
     assert ws["DK1"].value == 750000
 
@@ -216,8 +220,8 @@ def test_decommissioned_per_year_pnl_cols_are_fully_cleared():
     # instead, so nothing -- not even Dec's header labels -- should survive in
     # these columns anywhere in the built sheet.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     for col in ("CE", "CF", "CG", "CH", "CI", "CJ", "CQ", "CR", "CS", "CT", "CU"):
         for row in (1, 2, 3, 4, 250, 300):
             v = ws[f"{col}{row}"].value
@@ -230,8 +234,8 @@ def test_dynamic_year_breakdown_enumerates_multiple_years_plus_total():
     # sheet's own first data row, and end with a Total row -- all formula
     # driven, no Dec-specific hardcoded years or row bounds.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     assert ws["DZ3"].value == "=YEAR(A3)"
     assert ws["DZ4"].value == "=DZ3+1"
     assert ws["DZ5"].value == "=DZ4+1"
@@ -261,8 +265,8 @@ def test_dynamic_year_breakdown_produces_genuine_per_year_pnl_sums():
     # hardcoded "3000" -- the old hardcode silently excluded row 3001
     # whenever num_rows was 3000, and would have been wrong here too.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     ee3 = ws["EE3"].value
     assert ee3 == "=SUMIFS($BK$3:$BK$301,$CO$3:$CO$301,DZ3)"
     ef3 = ws["EF3"].value
@@ -275,8 +279,8 @@ def test_dynamic_year_breakdown_peak_trough_range_columns():
     # fixed-row-window columns), via MAXIFS/MINIFS over CP ("Calendar Year
     # Cumulative PnL") keyed on this sheet's own Year column.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     assert ws["EG2"].value == "Peak"
     assert ws["EH2"].value == "Trough"
     assert ws["EI2"].value == "Range"
@@ -289,8 +293,8 @@ def test_dz2_has_header_label():
     # targeted-fix-round-2, finding 5: EA2:EF2 (now EI2) had labels but DZ2
     # (the year column's own header) did not.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
+    ws = wb["Position Model - January"]
     assert ws["DZ2"].value == "Year"
 
 
@@ -299,8 +303,8 @@ def test_non_self_referencing_drawdown_columns_are_untouched():
     # accumulators -- they derive directly from other (now error-hardened)
     # columns, so they need no IFERROR wrap of their own.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=30)
+    ws = wb["Position Model - January"]
     assert ws["CM3"].value == "=CK3-CL3"
     assert ws["BX21"].value == "=BV21-BW21"
 
@@ -314,8 +318,8 @@ def test_generalized_trailing_window_accum_cols_no_longer_bootstrap_at_dec_row_7
     # (both driven by BT), anchored to row 2 (literal 0 boundary) / row 3
     # onward instead of Dec's row 740/741.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=30)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=30)
+    ws = wb["Position Model - January"]
     assert ws["BZ2"].value == 0
     assert ws["CA2"].value == 0
     assert ws["CB2"].value == 0
@@ -340,8 +344,8 @@ def test_dg49_dh49_are_dynamic_not_hardcoded_row_1386():
     # test_lookup_idiom_tests_data_a_not_the_self_referencing_column for why
     # not the self-referencing column itself, as Johansen_Monthly!K3 does).
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     dg49 = ws["DG49"].value
     dh49 = ws["DH49"].value
     assert "1386" not in dg49
@@ -363,8 +367,8 @@ def test_lookup_idiom_tests_data_a_not_the_self_referencing_column():
     # real data, so it is genuinely blank there. Covers both the
     # pre-existing DE43/DF43/DF46 (BV/BW/BY) lookups and the new DG49/DH49.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     for coord, target_col in (("DE43", "BV"), ("DF43", "BW"), ("DF46", "BY"), ("DG49", "CC"), ("DH49", "CA")):
         formula = ws[coord].value
         assert "Data!$A$" in formula, f"{coord}: {formula!r}"
@@ -380,8 +384,8 @@ def test_bn6_dq10_use_defined_names_not_bare_literals():
     # this (it only replaces address TOKENS, not bare numbers). Rewritten
     # directly to reference the existing defined names.
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=10)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
+    ws = wb["Position Model - January"]
     assert ws["BN6"].value == "=BN4*(ZLMultiplier/100)-BN5"
     assert ws["DQ10"].value == "=StopLossUSD_Base*DQ11"
 
@@ -394,8 +398,56 @@ def test_dj224_dn227_dangling_cq_cu_refs_are_cleared_not_leaking_zero():
     # cells are cleared entirely (see EG/EH/EI in the dynamic year-breakdown
     # table for the genuine general equivalent).
     wb = openpyxl.Workbook()
-    write_position_model_sheet(wb, SOURCE_PATH, num_rows=300)
-    ws = wb["Position Model"]
+    write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=300)
+    ws = wb["Position Model - January"]
     for col in ("DJ", "DK", "DL", "DM", "DN"):
         for row in (224, 225, 227):
             assert ws[f"{col}{row}"].value is None
+
+
+def test_position_model_march_sheet_is_named_for_its_month():
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=10)
+    assert "Position Model - March" in wb.sheetnames
+    assert "Position Model" not in wb.sheetnames
+
+
+def test_position_model_march_data_reference_relocated():
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=10)
+    ws = wb["Position Model - March"]
+    # A3 = "=Data!A3" in the single-month template; Data's offset for March is 22.
+    assert ws["A3"].value == "=Data!W3"
+
+
+def test_position_model_march_johansen_monthly_reference_relocated():
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=10)
+    ws = wb["Position Model - March"]
+    # I3 references Johansen_Monthly!$G:$G and $H:$H in the single-month template.
+    # Johansen_Monthly's offset for March is 13 -> G(7)+13=20='T', H(8)+13=21='U'.
+    formula = ws["I3"].value
+    assert "Johansen_Monthly!$T:$T" in formula
+    assert "Johansen_Monthly!$U:$U" in formula
+    assert "Johansen_Monthly!$G:$G" not in formula
+
+
+def test_position_model_march_internal_self_references_not_shifted():
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=10)
+    ws = wb["Position Model - March"]
+    # Y is a self-referencing accumulator column (Y{r}=IFERROR(Y{r-1},0)+...).
+    # It must stay column Y -- Position Model tabs are never column-shifted.
+    assert ws["Y4"].value is not None
+    assert "IFERROR(Y3,0)" in ws["Y4"].value
+
+
+def test_position_model_march_config_reference_uses_marchs_column():
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=10)
+    ws = wb["Position Model - March"]
+    # M4 (or wherever ZExitThreshold is consumed) must reference March's own
+    # Config column ("C"), not January's ("B") and not a defined name.
+    m_formula = ws["M4"].value
+    assert "Config!C17" in m_formula
+    assert "ZExitThreshold" not in m_formula
