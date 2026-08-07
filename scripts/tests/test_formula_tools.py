@@ -115,3 +115,55 @@ def test_unwrap_scalar_array_formula_passes_through_non_array_values():
     assert unwrap_scalar_array_formula("=A1+B1", "C1") == "=A1+B1"
     assert unwrap_scalar_array_formula(5, "C1") == 5
     assert unwrap_scalar_array_formula(None, "C1") is None
+
+
+def test_shift_columns_unqualified_self_reference():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns("=B3+B6", {None: (2, None)}) == "=D3+D6"
+
+def test_shift_columns_cross_sheet_reference_keeps_qualifier():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns(
+        "=Johansen_Monthly!$K$3", {"Johansen_Monthly": (13, "Johansen_Monthly")}
+    ) == "=Johansen_Monthly!$X$3"
+
+def test_shift_columns_full_column_reference():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns("=DiffLag!E:E", {"DiffLag": (5, "DiffLag")}) == "=DiffLag!J:J"
+
+def test_shift_columns_strips_qualifier_after_sheet_merge():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns("=Matrices!C50", {"Matrices": (10, None)}) == "=M50"
+
+def test_shift_columns_renames_qualifier_after_sheet_merge():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns(
+        "=Johansen!D18", {"Johansen": (10, "Matrices_Johansen_Results")}
+    ) == "=Matrices_Johansen_Results!N18"
+
+def test_shift_columns_leaves_unmapped_sheet_untouched():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns("=Config!C14", {"DiffLag": (5, "DiffLag")}) == "=Config!C14"
+
+def test_shift_columns_leaves_defined_name_tokens_untouched():
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns("=ZThreshold_Tier1*2", {None: (10, None)}) == "=ZThreshold_Tier1*2"
+
+def test_shift_columns_ignores_dollar_anchoring():
+    # Unlike shift_formula_rows, $ never blocks a column shift here -- see the
+    # shift_formula_columns docstring for why.
+    from formula_tools import shift_formula_columns
+    assert shift_formula_columns("=$B$5", {None: (3, None)}) == "=$E$5"
+
+def test_shift_columns_real_matrices_formula():
+    # Verbatim from the live source workbook's Matrices!C7 (read-only inspection).
+    from formula_tools import shift_formula_columns
+    formula = (
+        '=IF($B$5=0,"",SUMPRODUCT(INDEX(DiffLag!E:E,$B$4):INDEX(DiffLag!E:E,$B$2), '
+        'INDEX(DiffLag!E:E,$B$4):INDEX(DiffLag!E:E,$B$2))/$B$5)'
+    )
+    result = shift_formula_columns(formula, {None: (10, None), "DiffLag": (5, "DiffLag")})
+    assert result == (
+        '=IF($L$5=0,"",SUMPRODUCT(INDEX(DiffLag!J:J,$L$4):INDEX(DiffLag!J:J,$L$2), '
+        'INDEX(DiffLag!J:J,$L$4):INDEX(DiffLag!J:J,$L$2))/$L$5)'
+    )

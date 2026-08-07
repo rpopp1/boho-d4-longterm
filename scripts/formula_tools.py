@@ -2,7 +2,7 @@ import re
 
 import openpyxl
 from openpyxl.worksheet.formula import ArrayFormula
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
 
 
 def extract_row_formulas(path: str, sheet_name: str, row: int, max_col: int) -> dict[str, object]:
@@ -115,3 +115,66 @@ def unwrap_scalar_array_formula(value, coordinate: str):
             "this cell as-is rather than risk corrupting its spill semantics."
         )
     return value.text
+
+
+_SHEET_QUALIFIER = r"(?:'(?P<qname>[^']+)'|(?P<uname>[A-Za-z_][A-Za-z0-9_.]*))!"
+
+_COL_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(?:" + _SHEET_QUALIFIER + r")?"
+    r"(?:"
+    r"(?P<colabs>\$)?(?P<col>[A-Za-z]{1,3})(?P<rowabs>\$)?(?P<row>\d+)"
+    r"|"
+    r"(?P<fcol1>[A-Za-z]{1,3}):(?P<fcol2>[A-Za-z]{1,3})"
+    r")"
+    r"(?![A-Za-z0-9_(])"
+)
+
+_NEEDS_QUOTING_RE = re.compile(r"[^A-Za-z0-9_]")
+
+
+def _qualify_sheet(name: str | None) -> str:
+    if name is None:
+        return ""
+    if _NEEDS_QUOTING_RE.search(name):
+        return f"'{name}'!"
+    return f"{name}!"
+
+
+def shift_formula_columns(formula: str, sheet_map: dict) -> str:
+    """Relocate the COLUMN portion of every cell/range/full-column reference
+    in `formula` whose qualifying sheet name (or None, for an unqualified/
+    same-sheet reference) is a key in `sheet_map`.
+
+    sheet_map: {qualifier_or_None: (col_delta, new_sheet_name_or_None)}.
+    A reference whose qualifier is NOT a key in sheet_map (e.g. a Config!
+    reference, when "Config" isn't in the map) is left byte-for-byte
+    unchanged -- this is how Config references pass through untouched
+    during the multi-month column-relocation pass.
+
+    Unlike shift_formula_rows, this ignores $ anchoring entirely: $ was
+    only ever used in this codebase to protect a reference from *row*
+    shifting when a formula is filled down many rows (see
+    shift_formula_rows). Column shifting here is applied exactly once per
+    formula -- relocating a whole per-month block to its column position --
+    so there is no "moving target" to protect against, and every column
+    reference into a relocated sheet must move, anchored or not.
+    """
+    def _replace(match: "re.Match") -> str:
+        sheet_key = match.group("qname") or match.group("uname")
+        if sheet_key not in sheet_map:
+            return match.group(0)
+        col_delta, new_sheet = sheet_map[sheet_key]
+        prefix = _qualify_sheet(new_sheet)
+
+        if match.group("col"):
+            colabs = match.group("colabs") or ""
+            rowabs = match.group("rowabs") or ""
+            new_col = get_column_letter(column_index_from_string(match.group("col")) + col_delta)
+            return f"{prefix}{colabs}{new_col}{rowabs}{match.group('row')}"
+
+        new_col1 = get_column_letter(column_index_from_string(match.group("fcol1")) + col_delta)
+        new_col2 = get_column_letter(column_index_from_string(match.group("fcol2")) + col_delta)
+        return f"{prefix}{new_col1}:{new_col2}"
+
+    return _COL_REF_RE.sub(_replace, formula)
