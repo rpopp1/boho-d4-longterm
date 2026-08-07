@@ -78,16 +78,11 @@ CONFIG_MONTH_COLUMNS = {month: get_column_letter(2 + i) for i, month in enumerat
 _CONFIG_ROW_BY_FIELD = {name: row for name, row, _default in CONFIG_FIELDS}
 
 # Dec absolute Position-Model-local-param-block address -> defined name,
-# reconciled against the same live-workbook inspection CONSTANT_MAP above
-# was built from. Kept as a private lookup so constant_map_for_month below
-# only needs to know "which Config row", not re-derive the address list.
-_ADDRESS_TO_FIELD = {
-    "$DK$2": "ZLCentsPerLB", "$DK$5": "HOGalPerContract", "$DK$3": "ZLMultiplier",
-    "$DV$3": "ZThreshold_Tier1", "$DV$4": "ZThreshold_Tier2", "$DV$5": "ZThreshold_Tier3",
-    "$DV$6": "ZExitThreshold", "$DL$7": "SizingWeight_Tier1", "$DM$7": "SizingWeight_Tier2",
-    "$DN$7": "SizingWeight_Tier3", "$DQ$7": "EWMA_Lambda", "$DQ$8": "ShockMultiplierThreshold",
-    "$DQ$10": "StopLossUSD_Base", "$DK$11": "D4Multiplier", "$DQ$11": "RiskLevelInput",
-}
+# derived from CONSTANT_MAP above (same address->field mapping, just used
+# internally by constant_map_for_month). Kept as a private lookup so
+# constant_map_for_month below only needs to know "which Config row", not
+# re-derive the address list.
+_ADDRESS_TO_FIELD = CONSTANT_MAP
 
 
 def config_cell(month: str, row: int) -> str:
