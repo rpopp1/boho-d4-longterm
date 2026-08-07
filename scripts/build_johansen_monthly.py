@@ -1,82 +1,70 @@
 import openpyxl
-from formula_tools import extract_row_formulas, shift_formula_rows, rewrite_constants
-from config_map import CONSTANT_MAP
+from openpyxl.utils import get_column_letter
+from formula_tools import rewrite_constants, shift_formula_columns
+from config_map import constant_map_for_month
+from multi_month import column_offset, mjr_offsets, DIFFLAG_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP, shift_col
+from build_matrices_johansen import COMBINED_SHEET_NAME
 
 HEADERS = ["Date", "EndRow", "BOHO_Weight", "D4_Weight"]
 
 
-def write_johansen_monthly_sheet(wb, source_path: str, num_rows: int = 3000) -> None:
-    if "Johansen_Monthly" in wb.sheetnames:
-        del wb["Johansen_Monthly"]
-    ws = wb.create_sheet("Johansen_Monthly")
+def write_johansen_monthly_sheet(wb, source_path: str, month: str, num_rows: int = 3000) -> None:
+    if "Johansen_Monthly" not in wb.sheetnames:
+        ws = wb.create_sheet("Johansen_Monthly")
+    else:
+        ws = wb["Johansen_Monthly"]
+
+    self_offset = column_offset(month, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP)
+    diff_lag_offset = column_offset(month, DIFFLAG_BLOCK_WIDTH, GAP)
+    johansen_offset = mjr_offsets(month)["Johansen"]
+    month_constant_map = constant_map_for_month(month)
+
+    def col(letter):
+        return shift_col(letter, self_offset)
+
     for i, h in enumerate(HEADERS, start=1):
-        ws.cell(row=1, column=i, value=h)
+        ws[f"{get_column_letter(i + self_offset)}1"] = h
 
-    # Column A: plain per-row mirror of DiffLag's Date column. The live
-    # workbook uses a FILTER() spill anchor here ("compact away blanks"), but
-    # openpyxl cannot reliably reproduce Excel's dynamic-array spill semantics
-    # (see Task 7 Addendum v2 / Task 15 finding), and DiffLag's Date column
-    # has no interior blanks for real daily data, so a plain mirror is a safe,
-    # robust substitution — column A is only consumed locally by column B's
-    # own month-boundary comparison, within this same sheet.
+    # Column A: plain per-row mirror of this month's DiffLag Date column.
     for i in range(num_rows):
         row = 2 + i
-        ws[f"A{row}"] = f"=DiffLag!B{row}"
+        ws[f"{col('A')}{row}"] = f"=DiffLag!{shift_col('B', diff_lag_offset)}{row}"
 
-    # Column B: genuine per-row month-boundary detector — constructs a guarded
-    # formula that handles boundary rows where DiffLag's formula returns "".
-    # At the exact boundary row (last real data), DiffLag!B{row+1} returns ""
-    # (a formula-computed empty string), and the old design's FILTER left such
-    # cells genuinely blank. Our new column A mirrors DiffLag's formula output,
-    # so A{row+1} becomes "" at the boundary. Without a guard, MONTH("") errors
-    # in Excel. The guard IF(OR(A{row}="",A{row+1}=""),"",...)  matches the
-    # old design's behavior: blank inputs → blank output, no error.
+    # Column B: month-boundary detector, referencing this month's own column A
+    # and this month's DiffLag block.
     for i in range(num_rows):
         row = 2 + i
-        ws[f"B{row}"] = (
-            f'=IF(OR(A{row}="",A{row+1}=""),"",IF(MONTH(A{row})<>MONTH(A{row+1}), '
-            f'ROW(A{row})+ROW(DiffLag!B{row+1})-ROW(A{row})-1, ""))'
+        diff_lag_next = shift_col("B", diff_lag_offset)
+        a_col, b_col = col("A"), col("B")
+        ws[f"{b_col}{row}"] = (
+            f'=IF(OR({a_col}{row}="",{a_col}{row + 1}=""),"",IF(MONTH({a_col}{row})<>MONTH({a_col}{row + 1}), '
+            f'ROW({a_col}{row})+ROW(DiffLag!{diff_lag_next}{row + 1})-ROW({a_col}{row})-1, ""))'
         )
 
-    # C2/D2: fixed single-row lookups of the current live Johansen weight.
-    # Written once, unshifted — these lack $ anchors but are NOT row-relative
-    # (Johansen!D18/D19 are fixed eigenvector-result cells), so they must bypass
-    # the per-row shifter entirely rather than being shifted per row.
     source_wb = openpyxl.load_workbook(source_path, data_only=False)
     try:
         src = source_wb["Johansen_Monthly"]
-        ws["C2"] = rewrite_constants(src["C2"].value, CONSTANT_MAP)
-        ws["D2"] = rewrite_constants(src["D2"].value, CONSTANT_MAP)
+        c2 = shift_formula_columns(
+            rewrite_constants(src["C2"].value, month_constant_map),
+            {"Johansen": (johansen_offset, COMBINED_SHEET_NAME)},
+        )
+        d2 = shift_formula_columns(
+            rewrite_constants(src["D2"].value, month_constant_map),
+            {"Johansen": (johansen_offset, COMBINED_SHEET_NAME)},
+        )
+        ws[f"{col('C')}2"] = c2
+        ws[f"{col('D')}2"] = d2
     finally:
         source_wb.close()
 
-    # F2/G2 join H2/I2 as a uniformly manually-maintained walk-forward log —
-    # header labels only, no formula, no fabricated history below the header.
-    # (v1 tried to preserve F/G as FILTER spill anchors; Task 15's Dec-replay
-    # validation found that openpyxl cannot make Excel treat a written
-    # ArrayFormula as a true auto-resizing dynamic array rather than a
-    # legacy, fixed-size CSE array that pads excess cells with #N/A — so this
-    # redesign eliminates the spill formula entirely rather than attempting
-    # unsupported OOXML metadata surgery.)
-    ws["F2"] = "EndRow"
-    ws["G2"] = "Date"
-    ws["H2"] = "BOHO_Weight"
-    ws["I2"] = "D4_Weight"
+    ws[f"{col('F')}2"] = "EndRow"
+    ws[f"{col('G')}2"] = "Date"
+    ws[f"{col('H')}2"] = "BOHO_Weight"
+    ws[f"{col('I')}2"] = "D4_Weight"
 
-    ws["K2"] = "Active End Row"
-    # Self-updating last-row lookup, replacing Dec's hardcoded "=F69": finds
-    # the last row in column F (the month-end log) that is non-blank. F is
-    # now manually maintained rather than auto-computed, which makes this
-    # formula MORE robust, not less — no dependency on Excel's dynamic-array
-    # file format at all.
-    #
-    # MAJOR 5 fix: scoped to F3:F<capacity> rather than the whole F:F column.
-    # A whole-column LOOKUP(2,1/(F:F<>""),F:F) matches ANY non-blank cell in
-    # F, including F2's own header text "EndRow" -- so on a freshly-built
-    # book, before anyone has appended a real log row, K3 would return the
-    # literal string "EndRow" instead of a genuine empty/error state. Row 3
-    # is the log's first real data row (F2 is the header), and the sheet's
-    # own row capacity (num_rows, matching every other engine sheet) is the
-    # natural upper bound.
+    ws[f"{col('K')}2"] = "Active End Row"
     last_log_row = num_rows + 1
-    ws["K3"] = f'=LOOKUP(2,1/(F3:F{last_log_row}<>""),F3:F{last_log_row})'
+    f_col = col("F")
+    ws[f"{col('K')}3"] = f'=LOOKUP(2,1/({f_col}3:{f_col}{last_log_row}<>""),{f_col}3:{f_col}{last_log_row})'
+
+    ws[f"{shift_col('A', self_offset + JOHANSEN_MONTHLY_BLOCK_WIDTH)}1"] = month
