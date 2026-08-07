@@ -1,7 +1,7 @@
 import openpyxl
 from openpyxl.worksheet.formula import ArrayFormula
-from openpyxl.utils import get_column_letter
-from formula_tools import extract_row_formulas, shift_formula_rows, rewrite_constants
+from openpyxl.utils import get_column_letter, column_index_from_string
+from formula_tools import extract_row_formulas, shift_formula_rows, rewrite_constants, shift_formula_columns
 
 
 def _get_array_formula_columns(source_path: str, source_sheet: str, pattern_row: int, max_col: int) -> set:
@@ -30,6 +30,7 @@ def fill_sheet_from_pattern(
     num_rows: int,
     max_col: int,
     constant_map: dict,
+    column_shift_map: dict | None = None,
 ) -> None:
     pattern = extract_row_formulas(source_path, source_sheet, pattern_row, max_col)
     spill_cols = _get_array_formula_columns(source_path, source_sheet, pattern_row, max_col)
@@ -48,13 +49,18 @@ def fill_sheet_from_pattern(
             "— see Task 11 v2's redesign of Johansen_Monthly for the pattern."
         )
 
+    self_offset = (column_shift_map or {}).get(None, (0, None))[0]
+
     for i in range(num_rows):
         target_row = target_start_row + i
         row_delta = target_row - pattern_row
         for col_letter, value in pattern.items():
+            target_col_letter = get_column_letter(column_index_from_string(col_letter) + self_offset)
             if isinstance(value, str) and value.startswith("="):
                 shifted = shift_formula_rows(value, row_delta)
                 rewritten = rewrite_constants(shifted, constant_map)
-                target_ws[f"{col_letter}{target_row}"] = rewritten
+                if column_shift_map:
+                    rewritten = shift_formula_columns(rewritten, column_shift_map)
+                target_ws[f"{target_col_letter}{target_row}"] = rewritten
             else:
-                target_ws[f"{col_letter}{target_row}"] = value
+                target_ws[f"{target_col_letter}{target_row}"] = value
