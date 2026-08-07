@@ -60,3 +60,50 @@ CONSTANT_MAP = {
 MATRICES_ONLY_CONSTANT_MAP = {
     "$B$3": "JohansenWindowLen",          # Matrices!$B$3 ("Window Length (rows)"); corrected from $C$3, see report
 }
+
+from openpyxl.utils import get_column_letter
+from multi_month import MONTHS
+
+# Per-month Config layout: same fields/rows/defaults as CONFIG_LAYOUT above,
+# but with every field independently valued per contract month (one column
+# per month) instead of a single shared column + workbook-scoped defined
+# name. CONFIG_LAYOUT/CONSTANT_MAP/MATRICES_ONLY_CONSTANT_MAP above are
+# unused by the multi-month template once Tasks 5-11 finish migrating their
+# consumers; they are removed as the last step of Task 11.
+CONFIG_FIELDS = [(name, int("".join(ch for ch in cell if ch.isdigit())), default)
+                  for name, cell, default in CONFIG_LAYOUT]
+
+CONFIG_MONTH_COLUMNS = {month: get_column_letter(2 + i) for i, month in enumerate(MONTHS)}
+
+_CONFIG_ROW_BY_FIELD = {name: row for name, row, _default in CONFIG_FIELDS}
+
+# Dec absolute Position-Model-local-param-block address -> defined name,
+# reconciled against the same live-workbook inspection CONSTANT_MAP above
+# was built from. Kept as a private lookup so constant_map_for_month below
+# only needs to know "which Config row", not re-derive the address list.
+_ADDRESS_TO_FIELD = {
+    "$DK$2": "ZLCentsPerLB", "$DK$5": "HOGalPerContract", "$DK$3": "ZLMultiplier",
+    "$DV$3": "ZThreshold_Tier1", "$DV$4": "ZThreshold_Tier2", "$DV$5": "ZThreshold_Tier3",
+    "$DV$6": "ZExitThreshold", "$DL$7": "SizingWeight_Tier1", "$DM$7": "SizingWeight_Tier2",
+    "$DN$7": "SizingWeight_Tier3", "$DQ$7": "EWMA_Lambda", "$DQ$8": "ShockMultiplierThreshold",
+    "$DQ$10": "StopLossUSD_Base", "$DK$11": "D4Multiplier", "$DQ$11": "RiskLevelInput",
+}
+
+
+def config_cell(month: str, row: int) -> str:
+    return f"{CONFIG_MONTH_COLUMNS[month]}{row}"
+
+
+def constant_map_for_month(month: str) -> dict:
+    """Dec absolute address -> that month's Config sheet cell reference
+    (e.g. "Config!F17"), replacing CONSTANT_MAP's address -> defined-name
+    mapping now that every Config field is independently valued per month
+    instead of a single shared workbook-scoped name."""
+    return {
+        address: f"Config!{config_cell(month, _CONFIG_ROW_BY_FIELD[field])}"
+        for address, field in _ADDRESS_TO_FIELD.items()
+    }
+
+
+def matrices_only_constant_map_for_month(month: str) -> dict:
+    return {"$B$3": f"Config!{config_cell(month, _CONFIG_ROW_BY_FIELD['JohansenWindowLen'])}"}
