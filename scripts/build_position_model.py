@@ -4,7 +4,7 @@ import openpyxl
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 from sheet_cloner import fill_sheet_from_pattern
-from config_map import constant_map_for_month
+from config_map import CONFIG_FIELDS, config_cell, constant_map_for_month
 from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP
 from formula_tools import (
     extract_row_formulas,
@@ -13,6 +13,11 @@ from formula_tools import (
     shift_formula_rows,
     unwrap_scalar_array_formula,
 )
+
+# Config-sheet ROW per field, derived from the single source of truth rather
+# than hardcoded here, so a row change in config_map can never silently point
+# _apply_targeted_fix_round_2_overrides's BN6/DQ10 at the wrong field.
+_CONFIG_ROW = {name: row for name, row, _default in CONFIG_FIELDS}
 
 # ---------------------------------------------------------------------------
 # Independent verification (see task-12-report.md for full methodology and
@@ -339,7 +344,7 @@ def write_position_model_sheet(wb, source_path: str, month: str, num_rows: int =
         source_wb.close()
 
     _write_generalized_trailing_window_accum_cols(ws, last_target_row, max_col)
-    _apply_targeted_fix_round_2_overrides(ws, last_target_row, max_col)
+    _apply_targeted_fix_round_2_overrides(ws, last_target_row, max_col, month)
     _wrap_accumulator_self_references(ws, last_target_row)
     _write_dynamic_year_breakdown(ws, last_target_row)
 
@@ -399,7 +404,7 @@ def _write_generalized_trailing_window_accum_cols(ws, last_target_row: int, max_
         ws[f"CC{row}"] = f"=MIN(CB{row},CC{prev})"
 
 
-def _apply_targeted_fix_round_2_overrides(ws, last_target_row: int, max_col: int) -> None:
+def _apply_targeted_fix_round_2_overrides(ws, last_target_row: int, max_col: int, month: str) -> None:
     """A handful of one-off cell-level fixes from the targeted-fix-round-2
     review, applied as explicit overrides after the generic baseline/
     BOOT_END/PARAM_BLOCK_COLS fill passes above have already written
@@ -450,7 +455,22 @@ def _apply_targeted_fix_round_2_overrides(ws, last_target_row: int, max_col: int
       the parameter cell that already holds that value elsewhere
       (ZLMultiplier = 7.5, StopLossUSD_Base = -65000), so no address token
       ever appears for CONSTANT_MAP to find and replace. Rewritten directly
-      here to reference the existing defined names instead.
+      here to reference the parameter cell instead.
+
+      multi-month Task 11, review fix round 1: these two were originally
+      rewritten to the bare workbook-scoped DEFINED NAMES "ZLMultiplier" and
+      "StopLossUSD_Base". That was correct for the single-month template,
+      whose write_config_sheet created those names -- but the multi-month
+      write_config_sheet creates ZERO defined names (see
+      test_config_sheet_no_defined_names), one Config COLUMN per contract
+      month instead, so both cells would have evaluated to #NAME? on all
+      eight Position Model tabs. They now use this month's own Config cell
+      via config_cell(month, row), the same idiom as the rest of this
+      migration. Note these are bare NAMES in the formula text, not
+      "$XX$N"-style address tokens, so constant_map_for_month's substitution
+      path could never have reached them -- hence the direct fix here.
+      Rows confirmed against config_map.CONFIG_FIELDS: ZLMultiplier = row 8,
+      StopLossUSD_Base = row 27.
     - DJ224:DN227 ("Peak"/"Trough"/"Range" MAX/MIN over the now-decommissioned
       CQ-CU per-year columns): see the DJ224_DN227 clearing block below and
       the new EG/EH/EI columns in _write_dynamic_year_breakdown.
@@ -465,10 +485,10 @@ def _apply_targeted_fix_round_2_overrides(ws, last_target_row: int, max_col: int
         ws["DH49"] = f'=LOOKUP(2,1/({blank_test}),$CA$3:$CA${last_target_row})'
 
     if column_index_from_string("BN") <= max_col:
-        ws["BN6"] = "=BN4*(ZLMultiplier/100)-BN5"
+        ws["BN6"] = f"=BN4*(Config!{config_cell(month, _CONFIG_ROW['ZLMultiplier'])}/100)-BN5"
 
     if column_index_from_string("DQ") <= max_col:
-        ws["DQ10"] = "=StopLossUSD_Base*DQ11"
+        ws["DQ10"] = f"=Config!{config_cell(month, _CONFIG_ROW['StopLossUSD_Base'])}*DQ11"
 
     # targeted-fix-round-2, finding 2: DJ224:DN227 used MAX/MIN(CQ2:CQ253)-
     # style formulas over the now-decommissioned, fixed-row-window per-year

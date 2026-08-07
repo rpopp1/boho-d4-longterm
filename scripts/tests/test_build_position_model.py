@@ -376,18 +376,24 @@ def test_lookup_idiom_tests_data_a_not_the_self_referencing_column():
         assert f"${target_col}$3:${target_col}$301" in formula
 
 
-def test_bn6_dq10_use_defined_names_not_bare_literals():
+def test_bn6_dq10_use_config_cells_not_bare_literals():
     # targeted-fix-round-2, finding 5: BN6 (='=BN4*(7.5/100)-BN5') and DQ10
     # (='=-65000*DQ11') embed raw numeric literals directly in formula text
     # rather than as a reference to the parameter cell that already holds
     # the same value -- rewrite_constants()/CONSTANT_MAP can never catch
-    # this (it only replaces address TOKENS, not bare numbers). Rewritten
-    # directly to reference the existing defined names.
+    # this (it only replaces address TOKENS, not bare numbers).
+    #
+    # multi-month Task 11, review fix round 1: they used to be rewritten to
+    # the bare defined names "ZLMultiplier"/"StopLossUSD_Base", which the
+    # multi-month write_config_sheet no longer creates (it creates zero
+    # defined names -- one Config column per contract month instead), so both
+    # cells would have evaluated to #NAME?. They now point at this month's own
+    # Config cell. ZLMultiplier = Config row 8, StopLossUSD_Base = row 27.
     wb = openpyxl.Workbook()
     write_position_model_sheet(wb, SOURCE_PATH, "January", num_rows=10)
     ws = wb["Position Model - January"]
-    assert ws["BN6"].value == "=BN4*(ZLMultiplier/100)-BN5"
-    assert ws["DQ10"].value == "=StopLossUSD_Base*DQ11"
+    assert ws["BN6"].value == "=BN4*(Config!B8/100)-BN5"
+    assert ws["DQ10"].value == "=Config!B27*DQ11"
 
 
 def test_dj224_dn227_dangling_cq_cu_refs_are_cleared_not_leaking_zero():
@@ -451,3 +457,44 @@ def test_position_model_march_config_reference_uses_marchs_column():
     m_formula = ws["M4"].value
     assert "Config!C17" in m_formula
     assert "ZExitThreshold" not in m_formula
+
+
+def test_position_model_march_bn6_dq10_use_marchs_config_column_not_defined_names():
+    # multi-month Task 11, review fix round 1: _apply_targeted_fix_round_2_
+    # overrides used to write the bare workbook-scoped defined names
+    # "ZLMultiplier" (BN6) and "StopLossUSD_Base" (DQ10). The multi-month
+    # write_config_sheet creates ZERO defined names (see
+    # test_config_sheet_no_defined_names), so both cells would have evaluated
+    # to #NAME? on all eight Position Model tabs. Rows confirmed against
+    # config_map.CONFIG_FIELDS: ZLMultiplier = 8, StopLossUSD_Base = 27;
+    # March's Config column is C.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=10)
+    ws = wb["Position Model - March"]
+    assert ws["BN6"].value == "=BN4*(Config!C8/100)-BN5"
+    assert ws["DQ10"].value == "=Config!C27*DQ11"
+
+
+def test_no_bare_defined_name_references_survive_anywhere_in_the_sheet():
+    # Blanket guard (opt-out, not opt-in -- same philosophy as
+    # _relocate_cross_sheet_references): the multi-month workbook has no
+    # defined names at all, so ANY bare defined-name text left in a formula is
+    # a #NAME? waiting to happen. Scans every populated cell, not just the two
+    # known offenders, so a future edit reintroducing one is caught here.
+    wb = openpyxl.Workbook()
+    write_position_model_sheet(wb, SOURCE_PATH, "March", num_rows=30)
+    ws = wb["Position Model - March"]
+    forbidden = (
+        "ZLMultiplier", "StopLossUSD_Base", "ZExitThreshold", "HOGalPerContract",
+        "ZLCentsPerLB", "ZThreshold_Tier1", "ZThreshold_Tier2", "ZThreshold_Tier3",
+        "SizingWeight_Tier1", "SizingWeight_Tier2", "SizingWeight_Tier3",
+        "EWMA_Lambda", "ShockMultiplierThreshold", "D4Multiplier", "RiskLevelInput",
+        "JohansenWindowLen",
+    )
+    for row in ws.iter_rows(min_row=1, max_row=31):
+        for cell in row:
+            value = cell.value
+            if not isinstance(value, str):
+                continue
+            for name in forbidden:
+                assert name not in value, f"{cell.coordinate} still references {name}: {value!r}"
