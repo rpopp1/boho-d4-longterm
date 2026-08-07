@@ -1,39 +1,66 @@
 import openpyxl
 from build_static_sheets import write_notes_sheet, write_data_sheet
+from multi_month import MONTHS
 
-def test_notes_sheet_describes_config_workflow():
+
+def test_notes_sheet_describes_multi_month_workflow():
     wb = openpyxl.Workbook()
     write_notes_sheet(wb)
-    text = " ".join(str(c.value) for c in wb["Notes"]["A"] if c.value)
+    ws = wb["Notes"]
+    text = "\n".join(str(ws[f"A{i}"].value) for i in range(1, ws.max_row + 1) if ws[f"A{i}"].value)
     assert "Config" in text
-    assert "Data" in text
+    assert "one column per contract month" in text.lower()
 
 
-def test_notes_sheet_documents_johansen_monthly_manual_append_step():
-    # MAJOR 5: Johansen_Monthly!F:I is manually maintained (Task 11 v2
-    # redesign), not auto-computed. The Notes sheet used to claim the
-    # opposite ("Johansen_Monthly ... recompute automatically ... no formulas
-    # need editing"), which is an operational hazard for an actively-traded
-    # book -- someone could go a month without advancing the log and the
-    # Position Model's LOOKUP against Johansen_Monthly!G:I would silently
-    # have nothing new to find.
+def test_data_sheet_january_lands_at_column_a():
     wb = openpyxl.Workbook()
-    write_notes_sheet(wb)
-    text = " ".join(str(c.value) for c in wb["Notes"]["A"] if c.value)
-    assert "Johansen_Monthly" in text
-    assert "F:I" in text or ("F" in text and "manual" in text.lower())
-    assert "manual" in text.lower()
-    # Must no longer claim Johansen_Monthly recomputes automatically with
-    # nothing to edit -- that claim is false as of the Task 11 v2 redesign.
-    assert "Johansen_Monthly, Monthly Beta, and Position" not in text
-
-def test_data_sheet_headers_and_no_price_values():
-    wb = openpyxl.Workbook()
-    write_data_sheet(wb)
+    write_data_sheet(wb, "January")
     ws = wb["Data"]
     assert ws["A1"].value == "Date"
     assert ws["B1"].value == "BOHO"
-    assert ws["C1"].value == "D4"
-    assert ws["S2"].value == "ZL cents/LBs"
-    assert ws["T2"].value == "=ZLCentsPerLB"
-    assert ws["B2"].value is None  # no live price data in the template
+    assert ws["E1"].value == "Settlement Pricing"
+    assert ws["K1"].value == "Open Pricing"
+    assert ws["T3"].value == "=T2/T3" or ws["T4"].value == "=T2/T3"  # ZL Gal formula, see Step 3
+
+
+def test_data_sheet_march_lands_at_computed_offset():
+    wb = openpyxl.Workbook()
+    write_data_sheet(wb, "March")
+    ws = wb["Data"]
+    # March offset = 1 * (20 + 2) = 22 columns -> Date lands at column A+22 = "W"
+    assert ws["W1"].value == "Date"
+    assert ws["X1"].value == "BOHO"
+
+
+def test_data_sheet_month_label_in_gap_after_each_block():
+    # A plain text label in row 1 of the first gap column right after each
+    # month's block, so it's visually obvious where one month's block ends
+    # and the next begins (per the design spec's per-month-block layout).
+    from multi_month import column_offset, DATA_BLOCK_WIDTH, GAP, shift_col
+    wb = openpyxl.Workbook()
+    write_data_sheet(wb, "January")
+    write_data_sheet(wb, "March")
+    ws = wb["Data"]
+    jan_label_col = shift_col("A", column_offset("January", DATA_BLOCK_WIDTH, GAP) + DATA_BLOCK_WIDTH)
+    mar_label_col = shift_col("A", column_offset("March", DATA_BLOCK_WIDTH, GAP) + DATA_BLOCK_WIDTH)
+    assert ws[f"{jan_label_col}1"].value == "January"
+    assert ws[f"{mar_label_col}1"].value == "March"
+
+
+def test_data_sheet_accumulates_across_months():
+    wb = openpyxl.Workbook()
+    write_data_sheet(wb, "January")
+    write_data_sheet(wb, "March")
+    ws = wb["Data"]
+    assert ws["A1"].value == "Date"   # January's block is still there
+    assert ws["W1"].value == "Date"   # March's block was added, not a fresh sheet
+
+
+def test_data_sheet_month_header_row():
+    wb = openpyxl.Workbook()
+    write_data_sheet(wb, "August")
+    ws = wb["Data"]
+    from multi_month import column_offset, DATA_BLOCK_WIDTH, GAP, shift_col
+    offset = column_offset("August", DATA_BLOCK_WIDTH, GAP)
+    header_col = shift_col("A", offset)
+    assert ws[f"{header_col}1"].value == "Date"

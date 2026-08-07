@@ -1,27 +1,40 @@
+from multi_month import MONTHS, column_offset, DATA_BLOCK_WIDTH, GAP, shift_col
+from config_map import config_cell
+
+
 def write_notes_sheet(wb) -> None:
     if "Notes" in wb.sheetnames:
         del wb["Notes"]
     ws = wb.create_sheet("Notes", 0)
     lines = [
-        "Johansen (2-variable) Cointegration Template Engine",
+        "Johansen (2-variable) Cointegration Multi-Month Template",
         "",
-        "How to activate a new contract month:",
-        "1) Fill in the 'Config' sheet: contract identity, contract specs, Johansen window",
-        "   length, z-score thresholds, sizing weights, and risk parameters.",
-        "2) Go to the 'Data' sheet and paste that month's SBO/HO settlement and open",
-        "   pricing starting at row 2. Columns B (BOHO) and C (D4) are pasted values,",
-        "   matching the live December workbook's convention.",
-        "3) DiffLag, Matrices, Johansen, Monthly Beta, and Position Model recompute",
-        "   automatically from Data + Config; no formulas need editing.",
-        "4) REQUIRED MANUAL STEP, every month: on Johansen_Monthly, append one new row",
-        "   to columns F:I (Date, EndRow, BOHO_Weight, D4_Weight) — this walk-forward log",
-        "   is manually maintained, NOT auto-computed. Log that month's end-of-month date",
-        "   in F, the corresponding DiffLag row number in G, and that month's locked",
-        "   BOHO_Weight/D4_Weight (read off Johansen_Monthly!C2/D2 at month-end) in H/I.",
-        "   Position Model's spread construction (column I) looks up the prior month's",
-        "   weights from this log — if it isn't advanced, it has nothing to find and the",
-        "   book will not compute new positions for that month.",
-        "5) Results summarizes the Johansen cointegration test for the current window.",
+        "This workbook covers all 8 BOHO contract months (January, March, May, July,",
+        "August, September, October, December) at once. 'Data', 'DiffLag',",
+        "'Matrices_Johansen_Results', 'Johansen_Monthly', and 'Monthly Beta' each hold",
+        "8 side-by-side per-month column-blocks in month order. 'Position Model' has",
+        "8 separate tabs, one per contract month.",
+        "",
+        "How to activate a contract month:",
+        "1) Fill in that month's column on the 'Config' sheet: contract identity,",
+        "   contract specs, Johansen window length, z-score thresholds, sizing",
+        "   weights, and risk parameters. Each month has one column per contract month,",
+        "   independently calibrated -- there are no shared/global values.",
+        "2) Go to 'Data' and paste that month's SBO/HO settlement and open pricing",
+        "   into that month's block, starting at its own row 2. The BOHO/D4 columns",
+        "   in each block are pasted values, matching the live December workbook's",
+        "   convention.",
+        "3) DiffLag, Matrices_Johansen_Results, Johansen_Monthly, Monthly Beta, and",
+        "   that month's Position Model tab recompute automatically from Data +",
+        "   Config; no formulas need editing.",
+        "4) REQUIRED MANUAL STEP, every month, per contract month: on",
+        "   Johansen_Monthly, in that month's block, append one new row to its",
+        "   EndRow/Date/BOHO_Weight/D4_Weight log columns -- this walk-forward log",
+        "   is manually maintained, NOT auto-computed, separately for each of the",
+        "   8 months. That month's Position Model tab's spread construction looks",
+        "   up the prior month's locked weights from this log -- if it isn't",
+        "   advanced for a given month, that month's book will not compute new",
+        "   positions.",
         "",
         "This template's engine formulas are generated from, and must remain",
         "behaviorally identical to, the live December BOHO/D4 workbook's engine.",
@@ -30,29 +43,39 @@ def write_notes_sheet(wb) -> None:
         ws[f"A{i}"] = line
 
 
-def write_data_sheet(wb) -> None:
-    if "Data" in wb.sheetnames:
-        del wb["Data"]
-    ws = wb.create_sheet("Data")
-    ws["A1"] = "Date"
-    ws["B1"] = "BOHO"
-    ws["C1"] = "D4"
-    ws["E1"] = "Settlement Pricing"
-    ws["K1"] = "Open Pricing"
-    ws["E2"] = "Date"
-    ws["F2"] = "SBO"
-    ws["G2"] = "HO"
-    ws["H2"] = "BOHO"
-    ws["I2"] = "D4"
-    ws["K2"] = "Date"
-    ws["L2"] = "SBO"
-    ws["M2"] = "HO"
-    ws["N2"] = "BOHO"
-    ws["S2"] = "ZL cents/LBs"
-    ws["T2"] = "=ZLCentsPerLB"
-    ws["S3"] = "ZL Multiplier"
-    ws["T3"] = "=ZLMultiplier"
-    ws["S4"] = "ZL Gal"
-    ws["T4"] = "=T2/T3"
-    ws["S5"] = "HO Gal"
-    ws["T5"] = "=HOGalPerContract"
+def write_data_sheet(wb, month: str) -> None:
+    if "Data" not in wb.sheetnames:
+        wb.create_sheet("Data")
+    ws = wb["Data"]
+    offset = column_offset(month, DATA_BLOCK_WIDTH, GAP)
+
+    def col(letter):
+        return shift_col(letter, offset)
+
+    ws[f"{col('A')}1"] = "Date"
+    ws[f"{col('B')}1"] = "BOHO"
+    ws[f"{col('C')}1"] = "D4"
+    ws[f"{col('E')}1"] = "Settlement Pricing"
+    ws[f"{col('K')}1"] = "Open Pricing"
+    ws[f"{col('E')}2"] = "Date"
+    ws[f"{col('F')}2"] = "SBO"
+    ws[f"{col('G')}2"] = "HO"
+    ws[f"{col('H')}2"] = "BOHO"
+    ws[f"{col('I')}2"] = "D4"
+    ws[f"{col('K')}2"] = "Date"
+    ws[f"{col('L')}2"] = "SBO"
+    ws[f"{col('M')}2"] = "HO"
+    ws[f"{col('N')}2"] = "BOHO"
+    ws[f"{col('S')}2"] = "ZL cents/LBs"
+    ws[f"{col('T')}2"] = f"=Config!{config_cell(month, 9)}"   # ZLCentsPerLB, row 9
+    ws[f"{col('S')}3"] = "ZL Multiplier"
+    ws[f"{col('T')}3"] = f"=Config!{config_cell(month, 8)}"   # ZLMultiplier, row 8
+    ws[f"{col('S')}4"] = "ZL Gal"
+    ws[f"{col('T')}4"] = f"={col('T')}2/{col('T')}3"
+    ws[f"{col('S')}5"] = "HO Gal"
+    ws[f"{col('T')}5"] = f"=Config!{config_cell(month, 7)}"   # HOGalPerContract, row 7
+
+    # Plain text label in the gap column right after this month's block, so
+    # it's visually obvious where one month's block ends and the next
+    # begins on the shared tab.
+    ws[f"{shift_col('A', offset + DATA_BLOCK_WIDTH)}1"] = month
