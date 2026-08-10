@@ -82,13 +82,13 @@ For reference, each month's block starts at these columns:
 | Month | Starting column |
 |---|---|
 | January | A (offset 0) |
-| March | V (offset 22) |
-| May | AO (offset 44) |
-| July | BH (offset 66) |
-| August | CA (offset 88) |
-| September | BT (offset 110) |
-| October | EM (offset 132) |
-| December | FP (offset 154) |
+| March | W (offset 22) |
+| May | AS (offset 44) |
+| July | BO (offset 66) |
+| August | CK (offset 88) |
+| September | DG (offset 110) |
+| October | EC (offset 132) |
+| December | EY (offset 154) |
 
 Within each month's 20-column block, the structure is the same as the old single-month template's `Data` sheet:
 
@@ -107,7 +107,7 @@ Same convention as the Dec workbook: paste starting at row 2 within each month's
 `DiffLag`, `Matrices_Johansen_Results`, `Monthly Beta`, and all 8 `Position Model - <Month>` tabs recalculate automatically off `Data` + `Config`. No formulas to touch.
 
 ### Step 5 — The recurring manual step, every month going forward
-On `Johansen_Monthly`, append a new row to that month's 11-column block (columns F, G, H, I, ... in the January block, columns X, Y, Z, AA, ... in the March block, etc. — same offset pattern as the `Data` sheet).
+On `Johansen_Monthly`, append a new row to that month's 11-column block (columns F, G, H, I, ... in the January block, columns S, T, U, V, ... in the March block, etc. — same offset pattern as the `Data` sheet).
 
 **⚠ Known documentation bug:** the workbook's own `Notes` sheet describes this step as "Date in F, EndRow in G" — that is wrong. The actual generated column order (verified against `scripts/build_johansen_monthly.py`) is:
 
