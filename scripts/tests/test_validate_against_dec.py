@@ -235,7 +235,7 @@ def test_normalize_for_compare_reconciles_datetime_and_serial_number():
 
 def test_validation_reports_no_mismatches_on_dec_replay():
     mismatches = run_validation(
-        template_path=str(pathlib.Path(__file__).parent.parent.parent / "Johansen_Template_Engine.xlsx"),
+        template_path=str(pathlib.Path(__file__).parent.parent.parent / "Johansen_MultiMonth_Template_Engine.xlsx"),
         dec_source_path=SOURCE_PATH,
         output_diff_path=str(pathlib.Path(__file__).parent / "_validation_diff.csv"),
     )
@@ -259,3 +259,25 @@ def test_validation_reports_no_mismatches_on_dec_replay():
         f"{EXPECTED_ACCEPTED_MISMATCH_COUNT} expected -- investigate before "
         "updating this number, see targeted-fix-round-2-report.md"
     )
+
+
+def test_populate_throwaway_copy_writes_into_decembers_block_not_column_a(tmp_path):
+    import openpyxl
+    from build_template import build_template
+    from validate_against_dec import _populate_throwaway_copy
+    from multi_month import column_offset, DATA_BLOCK_WIDTH, GAP, shift_col
+
+    template_path = str(tmp_path / "template.xlsx")
+    build_template(SOURCE_PATH, template_path, num_rows=20)
+    throwaway_path = str(tmp_path / "throwaway.xlsx")
+
+    _populate_throwaway_copy(template_path, SOURCE_PATH, throwaway_path)
+
+    wb = openpyxl.load_workbook(throwaway_path, data_only=False)
+    december_offset = column_offset("December", DATA_BLOCK_WIDTH, GAP)
+    date_col = shift_col("A", december_offset)
+    boho_col = shift_col("B", december_offset)
+    assert wb["Data"][f"{date_col}2"].value is not None
+    assert wb["Data"][f"{boho_col}2"].value is not None
+    # January's block (offset 0) must NOT have been touched by Dec's data.
+    assert wb["Data"]["A2"].value is None

@@ -4,8 +4,10 @@ import shutil
 import openpyxl
 import win32com.client
 from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.utils.datetime import to_excel
-from config_map import CONFIG_LAYOUT
+from config_map import CONFIG_FIELDS, CONFIG_MONTH_COLUMNS
+from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP, shift_col
 from build_position_model import (
     PARAM_BLOCK_COLS, DECOMMISSIONED_PER_YEAR_COLS, YEAR_BREAKDOWN_COLS,
     GENERALIZED_TRAILING_WINDOW_ACCUM_COLS,
@@ -32,7 +34,7 @@ DEC_LIVE_VALUES = {
     "RiskLevelInput": 1,
     "ZLCentsPerLB": 60000,
 }
-# Field names above must match scripts/config_map.py's CONFIG_LAYOUT exactly
+# Field names above must match scripts/config_map.py's CONFIG_FIELDS exactly
 # (reconciled against the live workbook in Task 4) — "ShockMultiplierThreshold"
 # and "D4Multiplier" are the corrected names; earlier drafts of this plan used
 # "ShockMultiplierThresh" and "RiskLevelScalar", which no longer exist.
@@ -163,34 +165,49 @@ def param_block_value_parity_mismatches(dec_pm, template_pm) -> list:
 
 
 def _populate_throwaway_copy(template_path: str, dec_source_path: str, throwaway_path: str) -> None:
+    """Populate a throwaway copy of the multi-month template with Dec's real
+    live values, at DECEMBER'S OWN position within the consolidated workbook
+    (Config column I; Data/Johansen_Monthly column-shifted by December's
+    block offset) — not column A/B, which is January's block and would
+    silently validate the wrong month's slice of the workbook."""
     shutil.copy(template_path, throwaway_path)
     wb = openpyxl.load_workbook(throwaway_path, data_only=False)
+
     config_ws = wb["Config"]
-    layout_by_name = {name: cell for name, cell, _default in CONFIG_LAYOUT}
+    row_by_field = {name: row for name, row, _default in CONFIG_FIELDS}
+    dec_config_col = CONFIG_MONTH_COLUMNS["December"]
     for name, value in DEC_LIVE_VALUES.items():
-        cell = layout_by_name[name]
-        config_ws[cell] = value
+        config_ws[f"{dec_config_col}{row_by_field[name]}"] = value
+
+    data_offset = column_offset("December", DATA_BLOCK_WIDTH, GAP)
+    jm_offset = column_offset("December", JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP)
+
     dec_wb = openpyxl.load_workbook(dec_source_path, data_only=True)
     dec_data = dec_wb["Data"]
     data_ws = wb["Data"]
     for row in dec_data.iter_rows(min_row=2, max_row=dec_data.max_row, max_col=20):
         for cell in row:
             if cell.value is not None:
-                data_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+                col_letter, _ = coordinate_from_string(cell.coordinate)
+                target_col = shift_col(col_letter, data_offset)
+                data_ws[f"{target_col}{cell.row}"] = cell.value
 
     # Seed the Johansen_Monthly walk-forward log (F:I) with Dec's real
-    # historical values. As of the Task 11 v2 redesign, F/G/H/I are all
-    # manually-maintained columns in the generated template (no formula
-    # derives them) — Position Model's LOOKUP($A-1, Johansen_Monthly!$G:$G,
-    # ...!$H:$H / ...!$I:$I) formulas have nothing to find without this,
-    # regardless of any other fix, since this dependency predates and is
-    # independent of the spill-anchor defect that was fixed above it.
+    # historical values, at December's own column-shifted block position.
+    # As of the Task 11 v2 redesign, F/G/H/I are all manually-maintained
+    # columns in the generated template (no formula derives them) —
+    # Position Model's LOOKUP($A-1, Johansen_Monthly!$G:$G, ...!$H:$H /
+    # ...!$I:$I) formulas have nothing to find without this, regardless of
+    # any other fix, since this dependency predates and is independent of
+    # the spill-anchor defect that was fixed above it.
     dec_jm = dec_wb["Johansen_Monthly"]
     jm_ws = wb["Johansen_Monthly"]
     for row in dec_jm.iter_rows(min_row=2, max_row=dec_jm.max_row, min_col=6, max_col=9):  # F:I
         for cell in row:
             if cell.value is not None:
-                jm_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+                col_letter, _ = coordinate_from_string(cell.coordinate)
+                target_col = shift_col(col_letter, jm_offset)
+                jm_ws[f"{target_col}{cell.row}"] = cell.value
 
     wb.save(throwaway_path)
 
@@ -242,7 +259,7 @@ def run_validation(template_path: str, dec_source_path: str, output_diff_path: s
 
     template_wb = openpyxl.load_workbook(template_throwaway_path, data_only=True)
     dec_wb = openpyxl.load_workbook(dec_throwaway_path, data_only=True)
-    template_pm = template_wb["Position Model"]
+    template_pm = template_wb["Position Model - December"]
     dec_pm = dec_wb["Position Model"]
 
     max_col = min(dec_pm.max_column, template_pm.max_column)
