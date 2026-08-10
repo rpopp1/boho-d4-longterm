@@ -48,7 +48,7 @@ Total: ~15 physical tabs, vs. today's 10-tab template × up to 8 files.
 
 Every consolidated tab (`Data`, `DiffLag`, `Matrices_Johansen_Results`, `Johansen_Monthly`, `Monthly Beta`) follows the same layout convention:
 
-- Each month gets a fixed-width column-block, in month order (January → December), separated by a single blank gap column for readability.
+- Each month gets a fixed-width column-block, in month order (January → December), separated by blank gap columns for readability (exact widths finalized in the implementation plan).
 - A header row above each block names the month (e.g. "January", "March", ...), so it's visually obvious where one month's data ends and the next begins.
 - Each block's internal column layout is identical to that sheet's current single-month layout — only the starting column offset changes per month.
 - Row numbering is independent per block: each month's price history starts at its own row 2, with its own length. Months do not share a calendar; a month with a shorter history simply has fewer populated rows in its block.
@@ -61,8 +61,8 @@ Every consolidated tab (`Data`, `DiffLag`, `Matrices_Johansen_Results`, `Johanse
 Because every `Config` field is now independently calibrated per month, workbook-scoped Excel defined names (e.g. `ZThreshold_Tier1`) go away entirely — a single name can't resolve to 8 different cells. Instead:
 
 - `Config` becomes one tab with one row per parameter (contract identity, contract specs, Johansen window length, thresholds, sizing weights, stop-loss, EWMA lambda, shock multiplier, risk level — the full list in `scripts/config_map.py`'s `CONFIG_LAYOUT`) and one column per contract month.
-- Every formula that currently reads a defined name instead reads its own month's `Config` column directly (e.g. May's block reads `Config!E14` for its Tier 1 threshold, where today's single-month template would read the name `ZThreshold_Tier1`).
-- All 18 `CONFIG_LAYOUT` fields — including the true physical contract-spec constants (`HOGalPerContract`, `ZLMultiplier`, `ZLCentsPerLB`, `D4Multiplier`) that are unlikely to actually differ by month — still get one column per month, for structural uniformity. This keeps the substitution mechanism uniform (every field is "read this month's column," none are "read the one shared name") rather than building a hybrid of per-month-addressed and workbook-named fields.
+- Every formula that currently reads a defined name instead reads its own month's `Config` column directly (e.g. May's block reads `Config!D14` for its Tier 1 threshold, where today's single-month template would read the name `ZThreshold_Tier1`).
+- All 19 `CONFIG_FIELDS` entries — including the true physical contract-spec constants (`HOGalPerContract`, `ZLMultiplier`, `ZLCentsPerLB`, `D4Multiplier`) that are unlikely to actually differ by month — still get one column per month, for structural uniformity. This keeps the substitution mechanism uniform (every field is "read this month's column," none are "read the one shared name") rather than building a hybrid of per-month-addressed and workbook-named fields.
 - This is a parameterization of the existing substitution mechanism, not a new concept: `scripts/config_map.py`'s `CONSTANT_MAP` (currently "Dec address → defined name") becomes "Dec address → (parameter, month) → that month's Config column/row," applied once per month-block instead of once globally.
 
 ### Row capacity

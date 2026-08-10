@@ -1,4 +1,4 @@
-from multi_month import MONTHS, column_offset, DATA_BLOCK_WIDTH, GAP, shift_col
+from multi_month import column_offset, DATA_BLOCK_WIDTH, GAP, shift_col
 from config_map import config_cell
 
 
@@ -18,8 +18,9 @@ def write_notes_sheet(wb) -> None:
         "How to activate a contract month:",
         "1) Fill in that month's column on the 'Config' sheet: contract identity,",
         "   contract specs, Johansen window length, z-score thresholds, sizing",
-        "   weights, and risk parameters. Each month has one column per contract month,",
-        "   independently calibrated -- there are no shared/global values.",
+        "   weights, and risk parameters. The 'Config' sheet has one column per",
+        "   contract month, independently calibrated -- there are no shared/global",
+        "   values.",
         "2) Go to 'Data' and paste that month's SBO/HO settlement and open pricing",
         "   into that month's block, starting at its own row 2. The BOHO/D4 columns",
         "   in each block are pasted values, matching the live December workbook's",

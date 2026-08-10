@@ -17,7 +17,7 @@ A Python/openpyxl build pipeline that reads the live, actively-traded December B
 ```bash
 cd "C:\Users\Ryan Popp\OneDrive - Karbone Inc\Desktop\Renewable Fuels Analysis\RINs\BOHO Trading"
 git log --oneline | head -30          # full history, one commit per task
-cd scripts && py -m pytest tests/ -v  # full suite; takes ~10-15 min (real Excel COM automation)
+cd scripts && py -m pytest tests/ -v  # full suite; takes ~40-50 min. Only test_validate_against_dec.py uses real Excel COM automation; the rest of the runtime is openpyxl building 8-month workbooks (every builder now runs 8x, once per month, instead of once)
 ```
 
 - **This is a git repo** (initialized specifically for this project). `.xlsx`/`.xls`/`.xlsm` files are gitignored and must never be committed — the generated `Johansen_MultiMonth_Template_Engine.xlsx` and the live source workbook both live outside git tracking.
@@ -32,7 +32,7 @@ cd scripts && py -m pytest tests/ -v  # full suite; takes ~10-15 min (real Excel
 - Both hard constraints held throughout: live source workbook never written to; no Excel file ever committed to git.
 - The prior fixed-month project's Critical defects (accumulator `#N/A` propagation, literal-constant leaks) are fixed in the multi-month template and confirmed via real Excel COM recalculation (not just openpyxl-level unit tests — `scripts/validate_against_dec.py` drives real Excel via `pywin32`/COM to force recalculation and read back live values).
 - 70+ tests pass (`scripts/tests/`), including end-to-end replay of December's real historical data through the December block of the multi-month template, diffed against December's own real recalculated output, with an explicit count-bounded set of documented exceptions.
-- A one-time migration script (`scripts/migrate_existing_months.py`) successfully carried December's and January's existing real trading history and log entries into their respective blocks in `Johansen_BOHO_D4_Strategy_AllMonths.xlsx` — no data lost, no formulas broken.
+- A one-time migration script (`scripts/migrate_existing_months.py`) exists to carry December's and January's existing real trading history and log entries into their respective blocks in `Johansen_BOHO_D4_Strategy_AllMonths.xlsx`. Its `migrate_month_data` function has dedicated unit test coverage (`scripts/tests/test_migrate_existing_months.py`), and `_read_config_values` now has coverage too. `run_migration` (the end-to-end entry point that actually writes `Johansen_BOHO_D4_Strategy_AllMonths.xlsx` from the real source files) has **not yet been run against the real live files** — running it is a deliberate manual cutover step the user takes when ready, per the design spec's "Deployment/cutover" section, not something already done as part of this project.
 
 ## Known limitations — the punch list for next session
 
@@ -64,7 +64,7 @@ Roughly in priority order:
 | `build_position_model.py` | Multi-month version: called once per month (in a loop), generates one `Position Model - <Month>` tab per contract month (January through December), 8 separate tabs total. Each tab still contains the IFERROR-wrapped accumulators, dynamic year-breakdown, and param-block cells (the hardcoded-row limitations still apply independently in each tab) |
 | `build_template.py` | Orchestrator; run directly (`py build_template.py`) to regenerate `Johansen_MultiMonth_Template_Engine.xlsx` with all sheets and blocks in place |
 | `validate_against_dec.py` | End-to-end validator: copies Dec's real Data + Johansen_Monthly logs into the December block of a throwaway multi-month template copy, forces two real Excel recalculations via COM, diffs December's block output against December's own real output. This is the ultimate proof of correctness — trust it over any unit test. |
-| `migrate_existing_months.py` | One-time migration script that reads the old single-month December and January workbooks and carries their real trading history and Johansen_Monthly log entries into the corresponding blocks of `Johansen_BOHO_D4_Strategy_AllMonths.xlsx` — run once during project setup, not needed for future month activations |
+| `migrate_existing_months.py` | One-time migration script that reads the old single-month December and January workbooks and carries their real trading history and Johansen_Monthly log entries into the corresponding blocks of `Johansen_BOHO_D4_Strategy_AllMonths.xlsx` — built and unit-tested (`migrate_month_data`, `_read_config_values`) but **not yet run** against the real live files; the user runs it once, manually, when ready to cut over. Not needed for future month activations after that. |
 
 ## Hard-won gotchas (don't rediscover these)
 

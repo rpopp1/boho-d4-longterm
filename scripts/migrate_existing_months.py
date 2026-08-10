@@ -3,7 +3,6 @@ import openpyxl
 from openpyxl.utils.cell import coordinate_from_string
 from config_map import CONFIG_FIELDS, CONFIG_MONTH_COLUMNS
 from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP, shift_col
-from build_template import build_template
 
 
 def migrate_month_data(wb, source_wb, month: str, config_values: dict | None = None) -> None:
@@ -12,7 +11,13 @@ def migrate_month_data(wb, source_wb, month: str, config_values: dict | None = N
 
     data_ws = wb["Data"]
     source_data = source_wb["Data"]
-    for row in source_data.iter_rows(min_row=2, max_row=source_data.max_row, max_col=20):
+    # max_col=14 (not 20): columns O-T hold the S:T reference-block cells
+    # that build_static_sheets.py deliberately writes as formulas pointing
+    # at that month's Config column (=Config!<col>9, etc.) -- copying the
+    # source's frozen static values over those would decouple them from
+    # Config for the migrated month. Only Date/BOHO/D4 + Settlement + Open
+    # pricing (columns A-N) are actual pasted-value data to carry over.
+    for row in source_data.iter_rows(min_row=2, max_row=source_data.max_row, max_col=14):
         for cell in row:
             if cell.value is not None:
                 col_letter, _ = coordinate_from_string(cell.coordinate)

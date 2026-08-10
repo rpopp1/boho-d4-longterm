@@ -1,7 +1,7 @@
 import re
 
 import openpyxl
-from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils import column_index_from_string
 
 from sheet_cloner import fill_sheet_from_pattern
 from config_map import CONFIG_FIELDS, config_cell, constant_map_for_month
@@ -639,7 +639,7 @@ def _relocate_cross_sheet_references(ws, last_target_row: int, max_col: int, she
     gotchas"): safer to check every cell than to guess which columns might
     contain a cross-sheet reference.
     """
-    for row in ws.iter_rows(min_row=1, max_row=last_target_row, max_col=max_col):
+    for row in ws.iter_rows(min_row=1, max_row=max(last_target_row, ws.max_row), max_col=max_col):
         for cell in row:
             value = cell.value
             if isinstance(value, str) and value.startswith("="):

@@ -6,7 +6,7 @@ import win32com.client
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.utils.datetime import to_excel
-from config_map import CONFIG_FIELDS
+from config_map import CONFIG_FIELDS, CONFIG_MONTH_COLUMNS
 from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP, shift_col
 from build_position_model import (
     PARAM_BLOCK_COLS, DECOMMISSIONED_PER_YEAR_COLS, YEAR_BREAKDOWN_COLS,
@@ -175,8 +175,9 @@ def _populate_throwaway_copy(template_path: str, dec_source_path: str, throwaway
 
     config_ws = wb["Config"]
     row_by_field = {name: row for name, row, _default in CONFIG_FIELDS}
+    dec_config_col = CONFIG_MONTH_COLUMNS["December"]
     for name, value in DEC_LIVE_VALUES.items():
-        config_ws[f"I{row_by_field[name]}"] = value  # I = December's Config column
+        config_ws[f"{dec_config_col}{row_by_field[name]}"] = value
 
     data_offset = column_offset("December", DATA_BLOCK_WIDTH, GAP)
     jm_offset = column_offset("December", JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP)
