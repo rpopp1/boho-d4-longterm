@@ -42,7 +42,7 @@ def load(month):
 
 
 def simulate(df, stop=None, vol_stop=None, profit=None, ext_days=None, ext_age=None, giveback=None,
-             profit_swing=None, reentry=None, reentry_month=False):
+             profit_swing=None, reentry=None, reentry_month=False, max_days=None):
     """Return daily effective PnL and a per-trade log.
     stop: fixed $ stop (negative). vol_stop: (base, lo, hi, mode) with mode 'entry' or 'daily'.
     profit: take-profit $ level. ext_days: exit once N Extreme-regime days have been held in the trade.
@@ -64,7 +64,9 @@ def simulate(df, stop=None, vol_stop=None, profit=None, ext_days=None, ext_age=N
     i.e. only re-enter on genuinely fresh/stronger evidence, not just time passing.
     Pass 'profit_only' instead of True to additionally require the original exit that latched
     the trade to have been a profit-take (cur["reason"] == "profit"), not a stop/time/giveback
-    exit - i.e. only chase a position that was cut short on a win, never one proven wrong."""
+    exit - i.e. only chase a position that was cut short on a win, never one proven wrong.
+    max_days: time exit - go flat once the trade has been open this many trading days (day 1 = the
+    New Trade Start day), latched until the next New Trade Start like every other exit."""
     gb_frac, gb_floor = giveback if isinstance(giveback, tuple) else (giveback, 0.0)
     ps_level, ps_thr, ps_mode, ps_dir = profit_swing if profit_swing is not None else (None, None, None, "abs")
     BL, BN, ew, ref, reg = df.BL.values, df.BN.values, df.EWMA.values, df.EWMARef.values, df.Regime.values
@@ -126,6 +128,8 @@ def simulate(df, stop=None, vol_stop=None, profit=None, ext_days=None, ext_age=N
             hit = hit or "time"
         if giveback is not None and cur["peak"] >= gb_floor and cur["peak"] > 0 and bo <= cur["peak"] * (1 - gb_frac):
             hit = hit or "giveback"
+        if max_days is not None and cur["age"] >= max_days:
+            hit = hit or "max_days"
         if ps_level is not None and bo >= ps_level:
             thr = ps_thr * blvol[t] if ps_mode == "vol" else ps_thr
             move = BL[t] if ps_dir == "up" else abs(BL[t])

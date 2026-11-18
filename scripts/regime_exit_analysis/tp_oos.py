@@ -3,7 +3,8 @@
 # The profit-take level is chosen using only earlier data, then scored on later data:
 #   split        - choose on 2021-2023, score on 2024-2026
 #   walk-forward - for each year Y >= 2023, choose on all years < Y, trade year Y
-# Two forms: a flat $ level (December), and a multiple k of each month's stop (all 8 months, one k).
+# Two forms: a flat $ level (December, and the same level in all 8 months), and a multiple k of each
+# month's stop (all 8 months, one k). tp_levels/tp_curves also score every flat level for the page's selector.
 import json, runpy, sys
 from pathlib import Path
 import numpy as np
@@ -80,6 +81,22 @@ for k in KS:
                          **score(window(paths[(m, "k", k)], yrs))})
 k_best = max(KS[1:], key=lambda k: sharpe(pooled("k", k, IS)))
 
+# --- all 8 months, one flat $ level (same level in every month) ---
+for lv in LEVELS:
+    for per, yrs in [("2021-23", IS), ("2024-26", OOS)]:
+        grid.append({"test": "all_usd", "level": label_usd(lv), "level_num": lv or 0, "period": per, **score(pooled("usd", lv, yrs))})
+
+# --- every flat $ level scored on every window: December, the 8-month book and each month ---
+# (feeds the page's level selector; period is 2021-23, 2024-26, 2021-26 or a single year)
+level_rows = []
+PERIODS = [("2021-23", IS), ("2024-26", OOS), ("2021-26", YEARS)] + [(str(y), [y]) for y in YEARS]
+for lv in LEVELS:
+    for per, yrs in PERIODS:
+        level_rows.append({"test": "dec_usd", "level": label_usd(lv), "period": per, **score(window(paths[("December", "usd", lv)], yrs))})
+        level_rows.append({"test": "all_usd", "level": label_usd(lv), "period": per, **score(pooled("usd", lv, yrs))})
+        for m in MONTHS:
+            level_rows.append({"test": f"month_usd:{m}", "level": label_usd(lv), "period": per, **score(window(paths[(m, "usd", lv)], yrs))})
+
 for test, chosen, cur_s, tp_s in [
     ("dec_usd", label_usd(is_best), window(paths[("December", "usd", None)], OOS), window(paths[("December", "usd", is_best)], OOS)),
     ("all_k", label_k(k_best), pooled("k", None, OOS), pooled("k", k_best, OOS)),
@@ -102,17 +119,21 @@ for y in YEARS[2:]:
         wf.append({"test": test, "year": y, "chosen": chosen, "current": float(cur_s.sum()), "profit_take": float(tp_s.sum()),
                    "current_sharpe": sharpe(cur_s), "profit_take_sharpe": sharpe(tp_s)})
 
-# --- December out-of-sample equity curves: current vs level chosen on 2021-23 ---
-cur = window(paths[("December", "usd", None)], OOS).cumsum()
-tp = window(paths[("December", "usd", is_best)], OOS).cumsum()
-for d, a, b in zip(cur.index, cur.values, tp.values):
-    curves.append({"date": d.strftime("%Y-%m-%d"), "current": round(float(a), 2), "profit_take": round(float(b), 2)})
+# --- December equity curves over the full history: current vs level chosen on 2021-23 ---
+# period tags each day as the choosing window (2021-23) or the unseen window (2024-26).
+# One column per flat $ level: "current" is no profit-take, "lv_<level>" each profit-take level.
+cum = {("current" if lv is None else f"lv_{lv}"): window(paths[("December", "usd", lv)], YEARS).cumsum() for lv in LEVELS}
+idx = cum["current"].index
+for i, d in enumerate(idx):
+    row = {"date": d.strftime("%Y-%m-%d"), "period": "2021-23" if d.year in IS else "2024-26"}
+    row.update({k: round(float(v.iloc[i]), 2) for k, v in cum.items()})
+    curves.append(row)
 
 meta = [{"label": "tp_oos.py", "value": Path(__file__).read_text(), "type": "code", "lang": "python"},
         {"label": "exit_backtest.py", "value": Path(lib).read_text(), "type": "code", "lang": "python"},
         {"label": "Input", "value": Path(src).name},
-        {"label": "Excluded", "value": "December 2026-11-16 (suspect HO settle 4.2585 -> 3.2674)"}]
-for name, rows in [("tp_grid", grid), ("tp_picks", picks), ("tp_walkforward", wf), ("tp_curves", curves)]:
+        {"label": "Excluded", "value": "December 2026-11-16 (annual Z26->Z27 roll day; PnL formula spans two contracts, see roll-handling defect)"}]
+for name, rows in [("tp_grid", grid), ("tp_picks", picks), ("tp_walkforward", wf), ("tp_curves", curves), ("tp_levels", level_rows)]:
     (outdir / f"{name}.json").write_text(json.dumps({"rows": rows, "meta": meta}, separators=(",", ":")))
 
 pd.set_option("display.width", 220, "display.float_format", lambda v: f"{v:,.2f}")
