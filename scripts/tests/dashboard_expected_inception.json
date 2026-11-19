@@ -1,0 +1,26 @@
+{
+ "dec": {
+  "pnl": "=LOOKUP(2,1/ISNUMBER('Position Model - December'!$BV$2:$BV$3001),'Position Model - December'!$BV$2:$BV$3001)",
+  "sharpe": "=IFERROR((SUM(Dashboard_Calc!$I$2:$I$3001)/Dashboard_Calc!$Y$1)/SQRT(SUMPRODUCT(Dashboard_Calc!$P$2:$P$3001*(Dashboard_Calc!$I$2:$I$3001-(SUM(Dashboard_Calc!$I$2:$I$3001)/Dashboard_Calc!$Y$1))^2)/Dashboard_Calc!$Y$1)*SQRT(252),0)",
+  "sortino": "=IFERROR((SUM(Dashboard_Calc!$I$2:$I$3001)/Dashboard_Calc!$Y$1)/SQRT(SUMPRODUCT((Dashboard_Calc!$I$2:$I$3001<0)*Dashboard_Calc!$I$2:$I$3001^2)/Dashboard_Calc!$Y$1)*SQRT(252),0)",
+  "calmar": "=IFERROR((SUM(Dashboard_Calc!$I$2:$I$3001)/Dashboard_Calc!$Y$1)*252/ABS(LOOKUP(2,1/ISNUMBER('Position Model - December'!$BY$2:$BY$3001),'Position Model - December'!$BY$2:$BY$3001)),0)",
+  "maxdd": "=LOOKUP(2,1/ISNUMBER('Position Model - December'!$BY$2:$BY$3001),'Position Model - December'!$BY$2:$BY$3001)",
+  "winrate": "=IFERROR((COUNTIFS('Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\",'Position Model - December'!$BU$2:$BU$3000,\">0\"))/(COUNTIFS('Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\")),0)",
+  "avgwin": "=IFERROR(AVERAGEIFS('Position Model - December'!$BU$2:$BU$3000,'Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\",'Position Model - December'!$BU$2:$BU$3000,\">0\"),0)",
+  "avgloss": "=IFERROR(AVERAGEIFS('Position Model - December'!$BU$2:$BU$3000,'Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\",'Position Model - December'!$BU$2:$BU$3000,\"<0\"),0)",
+  "pf": "=IFERROR((SUMIFS('Position Model - December'!$BU$2:$BU$3000,'Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\",'Position Model - December'!$BU$2:$BU$3000,\">0\"))/ABS(SUMIFS('Position Model - December'!$BU$2:$BU$3000,'Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\",'Position Model - December'!$BU$2:$BU$3000,\"<0\")),0)",
+  "trades": "=COUNTIFS('Position Model - December'!$BS$2:$BS$3000,1,'Position Model - December'!$BS$3:$BS$3001,\"<>1\")"
+ },
+ "port": {
+  "pnl": "=LOOKUP(2,1/ISNUMBER(Dashboard_Calc!$K$2:$K$3001),Dashboard_Calc!$K$2:$K$3001)",
+  "sharpe": "=IFERROR((SUM(Dashboard_Calc!$J$2:$J$3001)/Dashboard_Calc!$Y$1)/SQRT(SUMPRODUCT(Dashboard_Calc!$P$2:$P$3001*(Dashboard_Calc!$J$2:$J$3001-(SUM(Dashboard_Calc!$J$2:$J$3001)/Dashboard_Calc!$Y$1))^2)/Dashboard_Calc!$Y$1)*SQRT(252),0)",
+  "sortino": "=IFERROR((SUM(Dashboard_Calc!$J$2:$J$3001)/Dashboard_Calc!$Y$1)/SQRT(SUMPRODUCT((Dashboard_Calc!$J$2:$J$3001<0)*Dashboard_Calc!$J$2:$J$3001^2)/Dashboard_Calc!$Y$1)*SQRT(252),0)",
+  "calmar": "=IFERROR((SUM(Dashboard_Calc!$J$2:$J$3001)/Dashboard_Calc!$Y$1)*252/ABS(LOOKUP(2,1/ISNUMBER(Dashboard_Calc!$N$2:$N$3001),Dashboard_Calc!$N$2:$N$3001)),0)",
+  "maxdd": "=LOOKUP(2,1/ISNUMBER(Dashboard_Calc!$N$2:$N$3001),Dashboard_Calc!$N$2:$N$3001)",
+  "winrate": "n/a",
+  "avgwin": "n/a",
+  "avgloss": "n/a",
+  "pf": "n/a",
+  "trades": "n/a"
+ }
+}

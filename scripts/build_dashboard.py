@@ -47,216 +47,26 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from config_map import CONFIG_MONTH_COLUMNS
 from multi_month import MONTHS
+from dashboard_metrics import (  # noqa: F401  (re-exported for tests and callers)
+    CALC_SHEET, CHART_YEAR_COUNT, FIRST_YEAR, LAST_TABLE_YEAR, LATEST_YEAR, MAX_DAY_INDEX,
+    PADDED_LAST_ROW, ROWS_IN_USE, TABLE_YEARS, VALID_COL, YEARCUM_FIRST_COL, YEARDD_FIRST_COL,
+    YEARPEAK_FIRST_COL, _mean_and_variance, _year_month_avgloss_formula, _year_month_avgwin_formula,
+    _year_month_calmar_formula, _year_month_maxdd_formula, _year_month_pnl_formula,
+    _year_month_profitfactor_formula, _year_month_sharpe_formula, _year_month_sortino_formula,
+    _year_month_tradecount_formula, _year_month_winrate_formula, calc_range, config_tier_cell,
+    dynamic_range_name, METRIC_KEYS, month_inception_formula, pm, portfolio_inception_formula,
+)
+from dashboard_style import (
+    BOLD, CURRENCY_FMT, DIVERGING_MID, DIVERGING_NEG, DIVERGING_POS, HEADER_FILL, HEADER_FONT,
+    MONTH_COLORS, PCT_FMT, PORTFOLIO_COLOR, RATIO_FMT, SECTION_FONT, section_title, style_header_row,
+)
 
 
-# Full template-padded row extent every Position Model tab shares (real data
-# currently ends around row 1392/1393 depending on month; everything past
-# that is genuinely blank). Using this full extent with ISNUMBER-gated
-# aggregation means every formula below auto-extends as more real trading
-# days get appended in the future, with no hardcoded per-month boundary --
-# deliberately avoiding this project's known "hardcoded Dec-row-boundary"
-# defect class.
-PADDED_LAST_ROW = 3001
-
-# Auto-extension. Dashboard_Calc is pre-filled with formulas down to
-# PADDED_LAST_ROW (about the end of 2032 at ~252 trading days a year), so
-# rows pasted after a build are picked up with no rebuild. The two earlier
-# designs both went stale: a hand-set last row (the 2026-08-14 build, found
-# ~3 months stale on 2026-11-16) and a last row computed at build time
-# (stopped at 11/16 while data reached 11/18). Column P flags the rows where
-# all 8 months hold a real date; unused rows carry zeros, Y1 counts the rows
-# in use and every mean/variance divides by it, so unused rows change
-# nothing. Charts plot named ranges that end at row 1 + Y1.
-CALC_SHEET = "Dashboard_Calc"
-VALID_COL = "P"
-ROWS_IN_USE = f"{CALC_SHEET}!$Y$1"
-LATEST_YEAR = f"{CALC_SHEET}!$Y$2"
-
-# Calendar-Year tables: one row per year from the start of the data through
-# 2032 (where row 3001 runs out). A year's row stays blank until data for it
-# exists. The PnL-by-year chart shows the latest CHART_YEAR_COUNT years.
-FIRST_YEAR = 2021
-LAST_TABLE_YEAR = 2032
-TABLE_YEARS = list(range(FIRST_YEAR, LAST_TABLE_YEAR + 1))
-CHART_YEAR_COUNT = 6
-MAX_DAY_INDEX = 260  # comfortably above any year's ~252 trading days
-
-# Dashboard_Calc column layout for the per-month, year-reset cumulative/peak/
-# drawdown helper columns (see build_calc_sheet) -- used by the Year x Month
-# Max Drawdown/Calmar table formulas below to know which column belongs to
-# which month.
-YEARCUM_FIRST_COL = 30  # AD
-YEARPEAK_FIRST_COL = 38  # AL
-YEARDD_FIRST_COL = 46  # AT
-
-# Okabe-Ito colorblind-safe categorical set (7 hues) plus one extra
-# well-separated hue for the 8th month; black is reserved for the Portfolio
-# aggregate line so it reads as "the reference line," not just another month.
-MONTH_COLORS = {
-    "January": "E69F00",
-    "March": "56B4E9",
-    "May": "009E73",
-    "July": "F0E442",
-    "August": "0072B2",
-    "September": "D55E00",
-    "October": "CC79A7",
-    "December": "6F4E37",
-}
-PORTFOLIO_COLOR = "000000"
 
 # Dropdown options for the "Filter Charts By" selector, in a fixed order that
 # every CHOOSE(...)-based helper formula below matches positionally: index 1
 # = Portfolio, indices 2-9 = the 8 months in the same order as MONTHS.
 SELECTOR_OPTIONS = ["Portfolio"] + MONTHS
-
-# One diverging pair (blue=positive / vermillion=negative / white midpoint),
-# reused for every polarity encoding on this tab (Z-score color scale,
-# position data bars, PnL heatmap) for a consistent mental model.
-DIVERGING_POS = "0072B2"
-DIVERGING_NEG = "D55E00"
-DIVERGING_MID = "FFFFFF"
-
-HEADER_FILL = PatternFill("solid", fgColor="1F3864")
-HEADER_FONT = Font(bold=True, color="FFFFFF")
-SECTION_FONT = Font(bold=True, size=12)
-BOLD = Font(bold=True)
-
-CURRENCY_FMT = '$#,##0;[RED]($#,##0)'
-RATIO_FMT = '0.00'
-PCT_FMT = '0.0%'
-
-
-def pm(month: str) -> str:
-    return f"'Position Model - {month}'"
-
-
-def config_tier_cell(month: str, row: int) -> str:
-    return f"Config!{CONFIG_MONTH_COLUMNS[month]}{row}"
-
-
-def calc_range(col: str) -> str:
-    """Absolute Dashboard_Calc range over every pre-filled row."""
-    return f"{CALC_SHEET}!${col}$2:${col}${PADDED_LAST_ROW}"
-
-
-def dynamic_range_name(col: str, sheet: str = CALC_SHEET) -> str:
-    """Formula text for a range that starts at row 2 and stops at the last
-    row in use (row 1 + Dashboard_Calc!Y1). INDEX, not OFFSET, so the name
-    is non-volatile."""
-    ref = f"'{sheet}'" if " " in sheet else sheet
-    return f"{ref}!${col}$2:INDEX({ref}!${col}$2:${col}${PADDED_LAST_ROW},{ROWS_IN_USE})"
-
-
-def _mean_and_variance(rng: str) -> tuple[str, str]:
-    """Population mean/variance over the rows in use. Unused rows hold 0, so
-    SUM is unaffected; the variance weights each squared deviation by the
-    row's in-use flag so unused rows add nothing."""
-    mean = f"SUM({rng})/{ROWS_IN_USE}"
-    var = f"SUMPRODUCT({calc_range(VALID_COL)}*({rng}-({mean}))^2)/{ROWS_IN_USE}"
-    return mean, var
-
-
-# ---------------------------------------------------------------------------
-# Year x Month per-metric formula builders. All continuous-return metrics
-# (PnL/Sharpe/Sortino/Calmar/Max Drawdown) are sourced from Dashboard_Calc's
-# already-ISNUMBER-cleaned per-month daily column (B:I) filtered by year via
-# bare-comparison SUMPRODUCT (year_range=year)*range -- never IF/IFERROR
-# wrapping a multi-cell range, per this environment's known implicit-
-# intersection gotcha. The trade-boundary metrics (Win Rate/Avg Win/Avg
-# Loss/Profit Factor/Trade Count) extend the corrected since-inception
-# formulas (BS active-to-inactive transition) with one extra COUNTIFS/
-# SUMIFS year criterion pulled from that month's own live CO column.
-# ---------------------------------------------------------------------------
-# `year` in these builders is a cell reference (the table row's own Year
-# cell, e.g. "$A12"), so a table row follows whatever year it displays.
-# Unused Dashboard_Calc rows have Year 0, so a year filter skips them.
-def _dc_daily_range(month: str) -> str:
-    return calc_range(get_column_letter(2 + MONTHS.index(month)))
-
-
-def _dc_year_range() -> str:
-    return calc_range("A")
-
-
-def _dc_yeardd_range(month: str) -> str:
-    return calc_range(get_column_letter(YEARDD_FIRST_COL + MONTHS.index(month)))
-
-
-def _year_filtered_mean(month: str, year: int) -> str:
-    yr, rng = _dc_year_range(), _dc_daily_range(month)
-    return f"SUMPRODUCT(({yr}={year})*{rng})/SUMPRODUCT(({yr}={year})*1)"
-
-
-def _year_month_pnl_formula(month: str, year: int) -> str:
-    yr, rng = _dc_year_range(), _dc_daily_range(month)
-    return f"=SUMPRODUCT(({yr}={year})*{rng})"
-
-
-def _year_month_sharpe_formula(month: str, year: int) -> str:
-    yr, rng = _dc_year_range(), _dc_daily_range(month)
-    mean = _year_filtered_mean(month, year)
-    var = f"SUMPRODUCT(({yr}={year})*({rng}-({mean}))^2)/SUMPRODUCT(({yr}={year})*1)"
-    return f"=IFERROR(({mean})/SQRT({var})*SQRT(252),0)"
-
-
-def _year_month_sortino_formula(month: str, year: int) -> str:
-    yr, rng = _dc_year_range(), _dc_daily_range(month)
-    mean = _year_filtered_mean(month, year)
-    downside_var = f"SUMPRODUCT(({yr}={year})*({rng}<0)*{rng}^2)/SUMPRODUCT(({yr}={year})*1)"
-    return f"=IFERROR(({mean})/SQRT({downside_var})*SQRT(252),0)"
-
-
-def _year_month_maxdd_expr(month: str, year: int) -> str:
-    """Bare (no leading '=') expression -- reused inside Calmar's formula."""
-    yr, dd_rng = _dc_year_range(), _dc_yeardd_range(month)
-    return f"IFERROR(INDEX({dd_rng},MATCH({year},{yr},0)+COUNTIF({yr},{year})-1),0)"
-
-
-def _year_month_maxdd_formula(month: str, year: int) -> str:
-    return f"={_year_month_maxdd_expr(month, year)}"
-
-
-def _year_month_calmar_formula(month: str, year: int) -> str:
-    mean = _year_filtered_mean(month, year)
-    maxdd = _year_month_maxdd_expr(month, year)
-    return f"=IFERROR(({mean})*252/ABS({maxdd}),0)"
-
-
-def _year_month_trade_parts(month: str, year: int):
-    bs_cur = f"{pm(month)}!$BS$2:$BS${PADDED_LAST_ROW - 1}"
-    bs_next = f"{pm(month)}!$BS$3:$BS${PADDED_LAST_ROW}"
-    trade_pnl = f"{pm(month)}!$BU$2:$BU${PADDED_LAST_ROW - 1}"
-    yr_raw = f"{pm(month)}!$CO$2:$CO${PADDED_LAST_ROW - 1}"
-    trade_count = f'COUNTIFS({bs_cur},1,{bs_next},"<>1",{yr_raw},{year})'
-    wins = f'COUNTIFS({bs_cur},1,{bs_next},"<>1",{yr_raw},{year},{trade_pnl},">0")'
-    gross_win = f'SUMIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{yr_raw},{year},{trade_pnl},">0")'
-    gross_loss = f'SUMIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{yr_raw},{year},{trade_pnl},"<0")'
-    return bs_cur, bs_next, trade_pnl, yr_raw, trade_count, wins, gross_win, gross_loss
-
-
-def _year_month_winrate_formula(month: str, year: int) -> str:
-    _, _, _, _, trade_count, wins, _, _ = _year_month_trade_parts(month, year)
-    return f"=IFERROR(({wins})/({trade_count}),0)"
-
-
-def _year_month_avgwin_formula(month: str, year: int) -> str:
-    bs_cur, bs_next, trade_pnl, yr_raw, _, _, _, _ = _year_month_trade_parts(month, year)
-    return f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{yr_raw},{year},{trade_pnl},">0"),0)'
-
-
-def _year_month_avgloss_formula(month: str, year: int) -> str:
-    bs_cur, bs_next, trade_pnl, yr_raw, _, _, _, _ = _year_month_trade_parts(month, year)
-    return f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{yr_raw},{year},{trade_pnl},"<0"),0)'
-
-
-def _year_month_profitfactor_formula(month: str, year: int) -> str:
-    _, _, _, _, _, _, gross_win, gross_loss = _year_month_trade_parts(month, year)
-    return f"=IFERROR(({gross_win})/ABS({gross_loss}),0)"
-
-
-def _year_month_tradecount_formula(month: str, year: int) -> str:
-    _, _, _, _, trade_count, _, _, _ = _year_month_trade_parts(month, year)
-    return f"={trade_count}"
 
 
 def build_year_month_table(
@@ -320,19 +130,6 @@ def build_year_month_table(
             ),
         )
     return last_row
-
-
-def style_header_row(ws, row: int, first_col: int, last_col: int) -> None:
-    for c in range(first_col, last_col + 1):
-        cell = ws.cell(row=row, column=c)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = Alignment(horizontal="center")
-
-
-def section_title(ws, row: int, text: str) -> None:
-    cell = ws.cell(row=row, column=1, value=text)
-    cell.font = SECTION_FONT
 
 
 # ---------------------------------------------------------------------------
@@ -667,122 +464,21 @@ def build_dashboard_sheet(wb):
     style_header_row(ws, perf_col_row, 1, len(perf_headers))
 
     perf_first_row = perf_col_row + 1
+    fmts = [CURRENCY_FMT, RATIO_FMT, RATIO_FMT, RATIO_FMT, CURRENCY_FMT,
+            PCT_FMT, CURRENCY_FMT, CURRENCY_FMT, RATIO_FMT, None]
     for i, month in enumerate(MONTHS):
         r = perf_first_row + i
-        bv = f"{pm(month)}!$BV$2:$BV${PADDED_LAST_ROW}"
-        by = f"{pm(month)}!$BY$2:$BY${PADDED_LAST_ROW}"
-        # Sharpe/Sortino/Calmar are sourced from Dashboard_Calc's per-month
-        # column (already IFERROR-cleaned cell-by-cell, confirmed 0 errors),
-        # NOT the raw source column, and use only SUM/SUMPRODUCT and
-        # bare-range comparison operators. IFERROR(multi-cell-range,0) used
-        # as a sub-expression inside SUMPRODUCT was tested in isolation and
-        # confirmed to perform row-based implicit intersection against the
-        # *formula's own row* in this Excel/COM environment rather than
-        # evaluating element-wise -- i.e. it silently returns one wrong
-        # scalar (whatever that source row happens to hold) broadcast across
-        # the whole array, not a per-element cleanup. That bug, not a math
-        # error, is what previously made every month's Sharpe/Sortino/Calmar
-        # come out as exactly 0.
-        clean_rng = calc_range(get_column_letter(2 + i))
-
         ws.cell(row=r, column=1, value=month)
-        ws.cell(row=r, column=2, value=f"=LOOKUP(2,1/ISNUMBER({bv}),{bv})")
-        ws.cell(row=r, column=2).number_format = CURRENCY_FMT
-
-        # Population mean / SD over the rows in use only (unused rows are 0;
-        # see _mean_and_variance) -- same result as AVERAGE/STDEV.P over the
-        # used rows, without a range that has to stop at a fixed row.
-        mean_cell, var = _mean_and_variance(clean_rng)
-        sharpe = f"=IFERROR(({mean_cell})/SQRT({var})*SQRT(252),0)"
-        ws.cell(row=r, column=3, value=sharpe)
-        ws.cell(row=r, column=3).number_format = RATIO_FMT
-
-        downside_var = f"SUMPRODUCT(({clean_rng}<0)*{clean_rng}^2)/{ROWS_IN_USE}"
-        sortino = f"=IFERROR(({mean_cell})/SQRT({downside_var})*SQRT(252),0)"
-        ws.cell(row=r, column=4, value=sortino)
-        ws.cell(row=r, column=4).number_format = RATIO_FMT
-
-        # BY ("RA_Max Drawdown") is a running worst-so-far series (each row
-        # = MIN(prior, today's drawdown)), so it is non-increasing by
-        # construction -- its last non-error value already equals the true
-        # overall max drawdown. Using the same LOOKUP-last-valid idiom as
-        # everywhere else avoids AGGREGATE, which returns #NAME? (genuinely
-        # unrecognized) in this Excel/COM environment despite being a
-        # long-standing function elsewhere.
-        max_dd = f"LOOKUP(2,1/ISNUMBER({by}),{by})"
-        calmar = f"=IFERROR(({mean_cell})*252/ABS({max_dd}),0)"
-        ws.cell(row=r, column=5, value=calmar)
-        ws.cell(row=r, column=5).number_format = RATIO_FMT
-
-        ws.cell(row=r, column=6, value=f"={max_dd}")
-        ws.cell(row=r, column=6).number_format = CURRENCY_FMT
-
-        # Trade boundary = a BS ("Effective Trade Active") transition from 1
-        # to not-1, i.e. the last day a trade is actually active -- NOT "the
-        # day before BN ('New Trade Start Flag') next fires", which is what
-        # this used to key off. That original pairing silently assumed
-        # trades are always back-to-back with no flat/no-position gap
-        # between one closing and the next starting; whenever a gap exists
-        # (confirmed via ground-truth recomputation from raw BN/BU data to
-        # be the large majority of the time in this data), it picked up a
-        # flat day (BU=0) instead of the prior trade's real realized PnL --
-        # producing a systematic near-zero-loss bias in every month, most
-        # visible in January/December where it zeroed out losses entirely.
-        # BS/BU stay row-aligned the same way BN/BU used to (both start at
-        # row 2), so this is a drop-in swap of which columns define the
-        # boundary, not a new formula shape.
-        bs_cur = f"{pm(month)}!$BS$2:$BS${PADDED_LAST_ROW - 1}"
-        bs_next = f"{pm(month)}!$BS$3:$BS${PADDED_LAST_ROW}"
-        trade_pnl = f"{pm(month)}!$BU$2:$BU${PADDED_LAST_ROW - 1}"
-        trade_count = f'COUNTIFS({bs_cur},1,{bs_next},"<>1")'
-        wins = f'COUNTIFS({bs_cur},1,{bs_next},"<>1",{trade_pnl},">0")'
-        gross_win = f'SUMIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{trade_pnl},">0")'
-        gross_loss = f'SUMIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{trade_pnl},"<0")'
-
-        ws.cell(row=r, column=7, value=f"=IFERROR(({wins})/({trade_count}),0)")
-        ws.cell(row=r, column=7).number_format = PCT_FMT
-        ws.cell(
-            row=r, column=8,
-            value=f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{trade_pnl},">0"),0)',
-        )
-        ws.cell(row=r, column=8).number_format = CURRENCY_FMT
-        ws.cell(
-            row=r, column=9,
-            value=f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{trade_pnl},"<0"),0)',
-        )
-        ws.cell(row=r, column=9).number_format = CURRENCY_FMT
-        ws.cell(row=r, column=10, value=f"=IFERROR(({gross_win})/ABS({gross_loss}),0)")
-        ws.cell(row=r, column=10).number_format = RATIO_FMT
-        ws.cell(row=r, column=11, value=f"={trade_count}")
+        for j, key in enumerate(METRIC_KEYS):
+            cell = ws.cell(row=r, column=2 + j, value=month_inception_formula(key, month))
+            if fmts[j]:
+                cell.number_format = fmts[j]
 
     portfolio_row = perf_first_row + len(MONTHS)
     ws.cell(row=portfolio_row, column=1, value="Portfolio (Sum of 8 Months)").font = BOLD
-    # Cumulative and running-max-drawdown columns carry their last value flat
-    # through the unused rows, so the last numeric value is still the latest.
-    calc_daily = calc_range("J")
-    calc_cum = calc_range("K")
-    calc_maxdd = calc_range("N")
-    ws.cell(row=portfolio_row, column=2, value=f"=LOOKUP(2,1/ISNUMBER({calc_cum}),{calc_cum})")
-    ws.cell(row=portfolio_row, column=2).number_format = CURRENCY_FMT
-    p_mean, p_var = _mean_and_variance(calc_daily)
-    p_sharpe = f"=IFERROR(({p_mean})/SQRT({p_var})*SQRT(252),0)"
-    ws.cell(row=portfolio_row, column=3, value=p_sharpe)
-    ws.cell(row=portfolio_row, column=3).number_format = RATIO_FMT
-    # Bare-range comparison/arithmetic operators only (no IFERROR/IF wrapping
-    # a multi-cell range) -- see the per-month comment above for why.
-    # calc_daily is already error-free by construction (Dashboard_Calc's J
-    # column sums 8 already-cleaned per-month columns), so no cleansing is
-    # even needed here.
-    p_downside_var = f"SUMPRODUCT(({calc_daily}<0)*{calc_daily}^2)/{ROWS_IN_USE}"
-    p_sortino = f"=IFERROR(({p_mean})/SQRT({p_downside_var})*SQRT(252),0)"
-    ws.cell(row=portfolio_row, column=4, value=p_sortino)
-    ws.cell(row=portfolio_row, column=4).number_format = RATIO_FMT
-    p_max_dd = f"LOOKUP(2,1/ISNUMBER({calc_maxdd}),{calc_maxdd})"
-    p_calmar = f"=IFERROR(({p_mean})*252/ABS({p_max_dd}),0)"
-    ws.cell(row=portfolio_row, column=5, value=p_calmar)
-    ws.cell(row=portfolio_row, column=5).number_format = RATIO_FMT
-    ws.cell(row=portfolio_row, column=6, value=f"={p_max_dd}")
-    ws.cell(row=portfolio_row, column=6).number_format = CURRENCY_FMT
+    for j, key in enumerate(METRIC_KEYS[:5]):
+        cell = ws.cell(row=portfolio_row, column=2 + j, value=portfolio_inception_formula(key))
+        cell.number_format = fmts[j]
     for col in (7, 8, 9, 10, 11):
         ws.cell(row=portfolio_row, column=col, value="n/a")
         ws.cell(row=portfolio_row, column=col).alignment = Alignment(horizontal="center")
