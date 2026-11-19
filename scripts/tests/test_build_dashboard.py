@@ -14,6 +14,8 @@ from build_dashboard import (
     build_dashboard_sheet,
     chart_range_names,
     dynamic_range_name,
+    EXPECTED_NA_RANGES,
+    errors_outside,
 )
 from multi_month import MONTHS
 
@@ -63,13 +65,35 @@ def test_by_year_chart_years_slide_with_the_latest_year(built):
     assert [calc.cell(1, c).value for c in range(18, 24)] == [f"=$Y$2-{k}" for k in range(5, -1, -1)]
 
 
-def test_date_charts_plot_named_ranges_that_end_at_the_last_row_in_use(built):
+def test_chart_names_follow_the_selected_period(built):
     names = chart_range_names()
-    assert set(names) == {"Chart_Dates", "Chart_Portfolio", "Chart_Selected"} | {f"Chart_{m}" for m in MONTHS}
+    sel = {"Chart_SelDates", "Chart_SelEquity", "Chart_SelDD"}
+    assert sel <= set(names)
     assert set(built[CALC_SHEET].defined_names) == set(names)
-    assert dynamic_range_name("K") == (
-        f"{CALC_SHEET}!$K$2:INDEX({CALC_SHEET}!$K$2:$K${PADDED_LAST_ROW},{CALC_SHEET}!$Y$1)")
-    charts = built["Dashboard"]._charts
-    plotted = {s.val.numRef.f for ch in charts for s in ch.series}
-    assert {f"{CALC_SHEET}!Chart_{m}" for m in MONTHS} <= plotted
-    assert f"{CALC_SHEET}!Chart_Selected" in plotted
+    assert names["Chart_SelEquity"] == (
+        f"INDEX({CALC_SHEET}!$BD$2:$BD${PADDED_LAST_ROW},{CALC_SHEET}!$Z$4):"
+        f"INDEX({CALC_SHEET}!$BD$2:$BD${PADDED_LAST_ROW},{CALC_SHEET}!$Z$5)")
+    assert names["Chart_SelDates"].startswith("INDEX('Position Model - January'!$A$2:$A$3001,")
+    assert "$BF$2:$BF$" in names["Chart_SelDD"]
+
+
+def test_selected_series_columns_follow_the_period(built):
+    calc = built[CALC_SHEET]
+    assert calc["BD5"].value == "=IF($Z$3=0,AB5,AC5)"
+    assert calc["BE5"].value == "=IF(AND($Z$3<>0,A5<>A4),BD5,MAX(BE4,BD5))"
+    assert calc["BF5"].value == "=MIN(0,BD5-BE5)"
+
+
+def test_overlay_gaps_instead_of_zero(built):
+    calc = built[CALC_SHEET]
+    assert "NA()" in calc["R100"].value and '""' not in calc["R100"].value
+
+
+def test_selected_year_overlay_column(built):
+    calc = built[CALC_SHEET]
+    assert calc["BG1"].value == '=IF($Z$3=0,"",$Z$3)'
+    assert calc["BG50"].value.startswith("=IF($Z$3=0,NA(),")
+
+
+def test_unexpected_errors_ignore_the_expected_na_ranges():
+    assert errors_outside(["R5", "W262", "BG2", "EX3", "A7", "BH9"], EXPECTED_NA_RANGES) == ["A7", "BH9"]

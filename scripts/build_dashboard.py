@@ -40,6 +40,7 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import coordinate_to_tuple, range_boundaries
 from openpyxl.chart.data_source import AxDataSource, NumRef
 from openpyxl.chart.series import SeriesLabel, StrRef
 from openpyxl.workbook.defined_name import DefinedName
@@ -250,7 +251,7 @@ def build_calc_sheet(wb):
             year_cell = f"{col_letter}$1"
             formula = (
                 f"=IF($Q{r}=0,0,"
-                f"IF($Q{r}>COUNTIF({year_range},{year_cell}),\"\","
+                f"IF($Q{r}>COUNTIF({year_range},{year_cell}),NA(),"
                 f"INDEX({cum_range},MATCH({year_cell},{year_range},0)+$Q{r}-1)))"
             )
             ws.cell(row=r, column=col, value=formula)
@@ -310,6 +311,27 @@ def build_calc_sheet(wb):
             ws[f"{pk}{r}"] = f"=IF(A{r}<>A{r - 1},O{r},MAX({pk}{r - 1},O{r}))"
             ws[f"{dd}{r}"] = f"=IF(A{r}<>A{r - 1},MIN(0,O{r}-{pk}{r}),MIN({dd}{r - 1},O{r}-{pk}{r}))"
 
+    # Selected series over the selected period (BD:BF) for the equity and
+    # drawdown charts: All years = since-inception cumulative (AB); a single
+    # year = that year's year-reset cumulative (AC), peak resetting each year.
+    ws["BD1"] = "Selected Series Cumulative PnL (Selected Period)"
+    ws["BE1"] = "Selected Series Running Peak (Selected Period)"
+    ws["BF1"] = "Selected Series Drawdown (Selected Period)"
+    for r in range(2, PADDED_LAST_ROW + 1):
+        ws[f"BD{r}"] = f"=IF($Z$3=0,AB{r},AC{r})"
+        ws[f"BE{r}"] = "=BD2" if r == 2 else f"=IF(AND($Z$3<>0,A{r}<>A{r - 1}),BD{r},MAX(BE{r - 1},BD{r}))"
+        ws[f"BF{r}"] = f"=MIN(0,BD{r}-BE{r})"
+
+    # "Selected year" overlay line (BG, day-index rows like R:W): the chosen
+    # year drawn on top of the grey history lines; #N/A (no line) for All years.
+    ws["BG1"] = '=IF($Z$3=0,"",$Z$3)'
+    for k in range(0, MAX_DAY_INDEX + 1):
+        r = 2 + k
+        ws[f"BG{r}"] = (
+            f"=IF($Z$3=0,NA(),IF($Q{r}=0,0,IF($Q{r}>COUNTIF({year_range},$Z$3),NA(),"
+            f"INDEX({cum_range},MATCH($Z$3,{year_range},0)+$Q{r}-1))))"
+        )
+
     build_metric_matrix(ws)
 
     # Sheet-scoped names the date-axis charts plot, each ending at the last
@@ -320,8 +342,39 @@ def build_calc_sheet(wb):
     return ws
 
 
+def _period_range_name(col: str, sheet: str = CALC_SHEET) -> str:
+    """A column's rows for the selected period: Dashboard_Calc!Z4..Z5 are the
+    first/last offsets into rows 2..PADDED_LAST_ROW (all rows in use when the
+    Year dropdown says All years)."""
+    ref = f"'{sheet}'" if " " in sheet else sheet
+    full = f"{ref}!${col}$2:${col}${PADDED_LAST_ROW}"
+    return f"INDEX({full},{CALC_SHEET}!$Z$4):INDEX({full},{CALC_SHEET}!$Z$5)"
+
+
+# Dashboard_Calc ranges that hold #N/A by design (chart gaps), skipped by the
+# post-build error scan.
+EXPECTED_NA_RANGES = ("R2:W262", "BG2:BG262", "EX2:EY9")
+
+
+def errors_outside(addresses: list[str], excluded: tuple[str, ...]) -> list[str]:
+    """The cell addresses not inside any of the `excluded` ranges."""
+    boxes = [range_boundaries(rng) for rng in excluded]
+    out = []
+    for addr in addresses:
+        col, row = coordinate_to_tuple(addr)[1], coordinate_to_tuple(addr)[0]
+        if not any(c1 <= col <= c2 and r1 <= row <= r2 for c1, r1, c2, r2 in boxes):
+            out.append(addr)
+    return out
+
+
 def chart_range_names() -> dict[str, str]:
-    names = {"Chart_Dates": dynamic_range_name("A", "Position Model - January")}
+    names = {
+        "Chart_SelDates": _period_range_name("A", "Position Model - January"),
+        "Chart_SelEquity": _period_range_name("BD"),
+        "Chart_SelDD": _period_range_name("BF"),
+    }
+    # Legacy names for the pre-redesign charts (removed with them in Task 6).
+    names["Chart_Dates"] = dynamic_range_name("A", "Position Model - January")
     for month in MONTHS:
         names[f"Chart_{month}"] = dynamic_range_name("BV", f"Position Model - {month}")  # RA cumulative
     names["Chart_Portfolio"] = dynamic_range_name("K")
@@ -874,9 +927,11 @@ def refresh_via_excel_com(path: Path) -> None:
             ws = wb.Worksheets(sheet_name)
             try:
                 rng = ws.UsedRange.SpecialCells(xlCellTypeFormulas, xlErrors)
-                count = rng.Count
+                addresses = [c.Address.replace("$", "") for area in rng.Areas for c in area.Cells]
             except Exception:
-                count = 0
+                addresses = []
+            excluded = EXPECTED_NA_RANGES if sheet_name == CALC_SHEET else ()
+            count = len(errors_outside(addresses, excluded))
             if count:
                 raise RuntimeError(f"{sheet_name}: {count} error cells after refresh")
             print(f"{sheet_name}: 0 error cells after refresh")
