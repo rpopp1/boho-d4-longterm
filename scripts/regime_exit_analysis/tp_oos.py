@@ -4,7 +4,8 @@
 #   split        - choose on 2021-2023, score on 2024-2026
 #   walk-forward - for each year Y >= 2023, choose on all years < Y, trade year Y
 # Two forms: a flat $ level (December, and the same level in all 8 months), and a multiple k of each
-# month's stop (all 8 months, one k). tp_levels/tp_curves also score every flat level for the page's selector.
+# month's stop (all 8 months, one k). tp_levels/tp_curves also score every flat level for the page's selector,
+# with and without the profit-only month-start re-entry ("usd_re" paths; tests and curve columns suffixed _re / re_).
 import json, runpy, sys
 from pathlib import Path
 import numpy as np
@@ -36,6 +37,12 @@ for m in MONTHS:
     for lv in LEVELS:
         eff, _ = simulate(data[m], stop=SB[m], profit=lv)
         paths[(m, "usd", lv)] = pd.Series(eff, index=data[m].Date)
+        # With the re-entry: it only re-opens profit-take exits, so with no profit-take it is the current rule.
+        if lv is None:
+            paths[(m, "usd_re", lv)] = paths[(m, "usd", lv)]
+        else:
+            eff, _ = simulate(data[m], stop=SB[m], profit=lv, reentry_month="profit_only")
+            paths[(m, "usd_re", lv)] = pd.Series(eff, index=data[m].Date)
     for k in KS:
         eff, _ = simulate(data[m], stop=SB[m], profit=None if k is None else k * -SB[m])
         paths[(m, "k", k)] = pd.Series(eff, index=data[m].Date)
@@ -86,6 +93,14 @@ for lv in LEVELS:
     for per, yrs in [("2021-23", IS), ("2024-26", OOS)]:
         grid.append({"test": "all_usd", "level": label_usd(lv), "level_num": lv or 0, "period": per, **score(pooled("usd", lv, yrs))})
 
+# --- the same two flat-$ grids with the profit-only month-start re-entry ---
+for lv in LEVELS:
+    for per, yrs in [("2021-23", IS), ("2024-26", OOS)]:
+        grid.append({"test": "dec_usd_re", "level": label_usd(lv), "level_num": lv or 0, "period": per,
+                     **score(window(paths[("December", "usd_re", lv)], yrs))})
+        grid.append({"test": "all_usd_re", "level": label_usd(lv), "level_num": lv or 0, "period": per,
+                     **score(pooled("usd_re", lv, yrs))})
+
 # --- every flat $ level scored on every window: December, the 8-month book and each month ---
 # (feeds the page's level selector; period is 2021-23, 2024-26, 2021-26 or a single year)
 level_rows = []
@@ -96,6 +111,11 @@ for lv in LEVELS:
         level_rows.append({"test": "all_usd", "level": label_usd(lv), "period": per, **score(pooled("usd", lv, yrs))})
         for m in MONTHS:
             level_rows.append({"test": f"month_usd:{m}", "level": label_usd(lv), "period": per, **score(window(paths[(m, "usd", lv)], yrs))})
+        level_rows.append({"test": "dec_usd_re", "level": label_usd(lv), "period": per, **score(window(paths[("December", "usd_re", lv)], yrs))})
+        level_rows.append({"test": "all_usd_re", "level": label_usd(lv), "period": per, **score(pooled("usd_re", lv, yrs))})
+        for m in MONTHS:
+            level_rows.append({"test": f"month_usd_re:{m}", "level": label_usd(lv), "period": per,
+                               **score(window(paths[(m, "usd_re", lv)], yrs))})
 
 for test, chosen, cur_s, tp_s in [
     ("dec_usd", label_usd(is_best), window(paths[("December", "usd", None)], OOS), window(paths[("December", "usd", is_best)], OOS)),
@@ -122,7 +142,9 @@ for y in YEARS[2:]:
 # --- December equity curves over the full history: current vs level chosen on 2021-23 ---
 # period tags each day as the choosing window (2021-23) or the unseen window (2024-26).
 # One column per flat $ level: "current" is no profit-take, "lv_<level>" each profit-take level.
+# "re_<level>" is the same level with the re-entry.
 cum = {("current" if lv is None else f"lv_{lv}"): window(paths[("December", "usd", lv)], YEARS).cumsum() for lv in LEVELS}
+cum.update({f"re_{lv}": window(paths[("December", "usd_re", lv)], YEARS).cumsum() for lv in LEVELS[1:]})
 idx = cum["current"].index
 for i, d in enumerate(idx):
     row = {"date": d.strftime("%Y-%m-%d"), "period": "2021-23" if d.year in IS else "2024-26"}
