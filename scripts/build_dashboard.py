@@ -35,39 +35,21 @@ from datetime import datetime
 from pathlib import Path
 
 import openpyxl
-from openpyxl.chart import BarChart, LineChart, Reference, Series
-from openpyxl.chart.marker import Marker
-from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import coordinate_to_tuple, range_boundaries
-from openpyxl.chart.data_source import AxDataSource, NumRef
-from openpyxl.chart.series import SeriesLabel, StrRef
 from openpyxl.workbook.defined_name import DefinedName
-from openpyxl.worksheet.datavalidation import DataValidation
 
-from config_map import CONFIG_MONTH_COLUMNS
-from multi_month import MONTHS
-from dashboard_metrics import (  # noqa: F401  (re-exported for tests and callers)
-    CALC_SHEET, CHART_YEAR_COUNT, FIRST_YEAR, LAST_TABLE_YEAR, LATEST_YEAR, MAX_DAY_INDEX,
-    PADDED_LAST_ROW, ROWS_IN_USE, TABLE_YEARS, VALID_COL, YEARCUM_FIRST_COL, YEARDD_FIRST_COL,
-    YEARPEAK_FIRST_COL, _mean_and_variance, _year_month_avgloss_formula, _year_month_avgwin_formula,
-    _year_month_calmar_formula, _year_month_maxdd_formula, _year_month_pnl_formula,
-    _year_month_profitfactor_formula, _year_month_sharpe_formula, _year_month_sortino_formula,
-    _year_month_tradecount_formula, _year_month_winrate_formula, calc_range, config_tier_cell,
-    dynamic_range_name, METRIC_KEYS, month_inception_formula, pm, portfolio_inception_formula,
+from dashboard_metrics import (  # noqa: F401  (several re-exported for tests and callers)
+    CALC_SHEET, CHART_YEAR_COUNT, FIRST_YEAR, LATEST_YEAR, MAX_DAY_INDEX, PADDED_LAST_ROW,
+    PORT_YEARDD_COL, PORT_YEARPEAK_COL, ROWS_IN_USE, TABLE_YEARS, VALID_COL, YEARCUM_FIRST_COL,
+    YEARDD_FIRST_COL, YEARPEAK_FIRST_COL, build_controls, build_metric_matrix, calc_range,
+    dynamic_range_name, pm,
 )
-from dashboard_metrics import (
-    PORT_YEARDD_COL, PORT_YEARPEAK_COL, build_controls, build_metric_matrix,
-)
-from dashboard_review import build_review_section
+from dashboard_review import build_review_charts, build_review_section
+from dashboard_style import BOLD, TITLE_FONT
 from dashboard_today import build_today_block, build_today_section
-from dashboard_style import (
-    BOLD, CURRENCY_FMT, DIVERGING_MID, DIVERGING_NEG, DIVERGING_POS, HEADER_FILL, HEADER_FONT,
-    MONTH_COLORS, PCT_FMT, PORTFOLIO_COLOR, RATIO_FMT, SECTION_FONT, TITLE_FONT, section_title,
-    style_header_row,
-)
-
+from multi_month import MONTHS
 
 
 # Dropdown options for the "Filter Charts By" selector, in a fixed order that
@@ -314,24 +296,7 @@ def chart_range_names() -> dict[str, str]:
         "Chart_SelEquity": _period_range_name("BD"),
         "Chart_SelDD": _period_range_name("BF"),
     }
-    # Legacy names for the pre-redesign charts (removed with them in Task 6).
-    names["Chart_Dates"] = dynamic_range_name("A", "Position Model - January")
-    for month in MONTHS:
-        names[f"Chart_{month}"] = dynamic_range_name("BV", f"Position Model - {month}")  # RA cumulative
-    names["Chart_Portfolio"] = dynamic_range_name("K")
-    names["Chart_Selected"] = dynamic_range_name("AB")
     return names
-
-
-def _plot_name(series: Series, name: str) -> None:
-    """Point a chart series' values at a Dashboard_Calc-scoped name."""
-    series.val.numRef.f = f"{CALC_SHEET}!{name}"
-    series.val.numRef.numCache = None
-
-
-def _plot_categories(chart) -> None:
-    for series in chart.series:
-        series.cat = AxDataSource(numRef=NumRef(f=f"{CALC_SHEET}!Chart_Dates"))
 
 
 # ---------------------------------------------------------------------------
@@ -364,145 +329,8 @@ def build_dashboard_sheet(wb):
     widths = {"A": 22, **{c: 15 for c in "BCDEFGHIJKLM"}}
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
-    ws.anchors = anchors  # for the chart builder
+    build_review_charts(ws, wb, anchors["charts"])
     return ws
-
-
-def build_cumulative_pnl_chart(ws, wb, anchor: str) -> None:
-    chart = LineChart()
-    chart.title = "Cumulative PnL Since Inception (Risk-Adjusted)"
-    chart.style = 2
-    chart.y_axis.title = "Cumulative PnL ($)"
-    chart.y_axis.number_format = "$#,##0"
-    chart.x_axis.title = "Date"
-    chart.height = 10
-    chart.width = 22
-    chart.legend.position = "r"
-    chart.legend.overlay = False
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-
-    # Each series is built on a placeholder range, then pointed at its named
-    # range (chart_range_names), which ends at the last row in use.
-    calc_ws = wb[CALC_SHEET]
-    placeholder = Reference(calc_ws, min_col=11, min_row=2, max_row=3)
-
-    for month in MONTHS:
-        series = Series(placeholder, title=month)
-        _plot_name(series, f"Chart_{month}")
-        series.graphicalProperties.line.solidFill = MONTH_COLORS[month]
-        series.graphicalProperties.line.width = 15000
-        series.marker = Marker(symbol="none")
-        series.smooth = False
-        chart.series.append(series)
-
-    port_series = Series(placeholder, title="Portfolio")
-    _plot_name(port_series, "Chart_Portfolio")
-    port_series.graphicalProperties.line.solidFill = PORTFOLIO_COLOR
-    port_series.graphicalProperties.line.width = 25000
-    port_series.marker = Marker(symbol="none")
-    port_series.smooth = False
-    chart.series.append(port_series)
-
-    _plot_categories(chart)
-    ws.add_chart(chart, anchor)
-
-
-def build_ranking_chart(ws, anchor: str, perf_first_row: int) -> None:
-    chart = BarChart()
-    chart.type = "col"
-    chart.title = "Sharpe Ratio by Contract Month (Risk-Adjusted)"
-    chart.y_axis.title = "Sharpe"
-    chart.height = 9
-    chart.width = 22
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-
-    data = Reference(ws, min_col=3, min_row=perf_first_row, max_row=perf_first_row + len(MONTHS) - 1)
-    cats = Reference(ws, min_col=1, min_row=perf_first_row, max_row=perf_first_row + len(MONTHS) - 1)
-    series = Series(data, title="Sharpe")
-    chart.series.append(series)
-    chart.set_categories(cats)
-
-    bar_series = chart.series[0]
-    bar_series.graphicalProperties.solidFill = None
-    for i, month in enumerate(MONTHS):
-        pt = openpyxl.chart.marker.DataPoint(idx=i)
-        pt.graphicalProperties.solidFill = MONTH_COLORS[month]
-        bar_series.data_points.append(pt)
-
-    ws.add_chart(chart, anchor)
-
-
-def build_pnl_by_year_chart(ws, wb, anchor: str) -> None:
-    calc_ws = wb["Dashboard_Calc"]
-    chart = LineChart()
-    chart.title = "PnL by Year, Selected Series (Trading-Day-of-Year Overlay)"
-    chart.y_axis.title = "Cumulative PnL ($)"
-    chart.y_axis.number_format = "$#,##0"
-    chart.x_axis.title = "Trading Day of Year"
-    chart.height = 10
-    chart.width = 22
-    chart.legend.position = "r"
-    chart.legend.overlay = False
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-
-    cats = Reference(calc_ws, min_col=17, min_row=2, max_row=2 + MAX_DAY_INDEX)  # Q, no header
-    # 261 distinct day-index categories would otherwise each get their own
-    # illegible, overlapping tick label -- skip to one label every 20 days.
-    chart.x_axis.tickLblSkip = 20
-    chart.x_axis.tickMarkSkip = 20
-    # Sequential light->dark ramp for the earlier years plus black for the
-    # latest (usually partial) year, so the in-progress line reads as the
-    # reference/foreground line against the historical backdrop. The year
-    # headers (R1:W1) are formulas, so the window slides with the data.
-    year_line_colors = ["9EC5E0", "6BAED6", "3182BD", "08519C", "54278F", "000000"]
-    assert len(year_line_colors) == CHART_YEAR_COUNT
-    for j in range(CHART_YEAR_COUNT):
-        col = 18 + j
-        data = Reference(calc_ws, min_col=col, min_row=1, max_row=2 + MAX_DAY_INDEX)
-        series = Series(data, title_from_data=True)
-        series.graphicalProperties.line.solidFill = year_line_colors[j]
-        series.graphicalProperties.line.width = 20000 if j != CHART_YEAR_COUNT - 1 else 28000
-        series.marker = Marker(symbol="none")
-        series.smooth = False
-        chart.series.append(series)
-    chart.set_categories(cats)
-    ws.add_chart(chart, anchor)
-
-
-def build_selected_series_chart(ws, wb, anchor: str) -> None:
-    """Single-line cumulative-PnL drill-down driven by the 'Filter Charts By'
-    dropdown (Dashboard!O2) via Dashboard_Calc!AB (Selected Series
-    Cumulative PnL). Defaults to Portfolio. Complements, rather than
-    replaces, the always-all-months overview chart -- this is the "isolate
-    one series" view; that one is the "compare all at once" view."""
-    chart = LineChart()
-    chart.title = "Cumulative PnL, Selected Series (see filter above)"
-    chart.style = 2
-    chart.y_axis.title = "Cumulative PnL ($)"
-    chart.y_axis.number_format = "$#,##0"
-    chart.x_axis.title = "Date"
-    chart.height = 10
-    chart.width = 22
-    chart.legend.position = "r"
-    chart.legend.overlay = False
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-
-    calc_ws = wb[CALC_SHEET]
-    placeholder = Reference(calc_ws, min_col=28, min_row=2, max_row=3)  # AB
-    series = Series(placeholder)
-    series.tx = SeriesLabel(strRef=StrRef(f"{CALC_SHEET}!$AB$1"))
-    _plot_name(series, "Chart_Selected")
-    series.graphicalProperties.line.solidFill = PORTFOLIO_COLOR
-    series.graphicalProperties.line.width = 20000
-    series.marker = Marker(symbol="none")
-    series.smooth = False
-    chart.series.append(series)
-    _plot_categories(chart)
-    ws.add_chart(chart, anchor)
 
 
 def main(target_file: Path) -> None:

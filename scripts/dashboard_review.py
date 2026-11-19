@@ -189,3 +189,115 @@ def build_review_section(ws, calc_ws) -> dict:
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     return {**a, "year_last": year_last, "end": end}
+
+
+# ---------------------------------------------------------------------------
+# Charts
+# ---------------------------------------------------------------------------
+from openpyxl.chart import AreaChart, BarChart, LineChart, Reference, Series  # noqa: E402
+from openpyxl.chart.data_source import AxDataSource, NumRef  # noqa: E402
+from openpyxl.chart.marker import Marker  # noqa: E402
+
+FULL_WIDTH_CM = 30
+BAR_HELPER_ROWS = range(2, 2 + len(MONTHS))  # Dashboard_Calc EW:EY rows 2-9
+YEAR_LINE_GREYS = ["E0E0E0", "C8C8C8", "B0B0B0", "989898", "808080", "686868"]
+
+
+def _named_series(ref, name: str, color: str, width: int) -> Series:
+    s = Series(ref, title=None)
+    s.val.numRef.f = f"{CALC_SHEET}!{name}"
+    s.val.numRef.numCache = None
+    s.graphicalProperties.line.solidFill = color
+    s.graphicalProperties.line.width = width
+    s.smooth = False
+    return s
+
+
+def _date_axis(chart) -> None:
+    for s in chart.series:
+        s.cat = AxDataSource(numRef=NumRef(f=f"{CALC_SHEET}!Chart_SelDates"))
+    chart.x_axis.number_format = "mmm yy"
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.legend = None
+
+
+def _build_bar_helpers(calc_ws) -> None:
+    calc_ws["EW1"], calc_ws["EX1"], calc_ws["EY1"] = "Bar Month", "Other Months", "Selected Month"
+    for i, month in enumerate(MONTHS):
+        r = BAR_HELPER_ROWS[i]
+        v = matrix_lookup("$Z$6", str(i + 2), "$Z$2")
+        calc_ws[f"EW{r}"] = month
+        calc_ws[f"EX{r}"] = f"=IF($Z$1={i + 2},NA(),{v})"
+        calc_ws[f"EY{r}"] = f"=IF($Z$1={i + 2},{v},NA())"
+
+
+def build_review_charts(ws, wb, anchor_row: int) -> None:
+    calc_ws = wb[CALC_SHEET]
+    placeholder = Reference(calc_ws, min_col=56, min_row=2, max_row=3)  # BD
+
+    equity = LineChart()
+    equity.title = "Equity curve (risk-adjusted cumulative PnL)"
+    equity.y_axis.number_format = "$#,##0"
+    equity.y_axis.majorGridlines.spPr = None
+    eq = _named_series(placeholder, "Chart_SelEquity", "000000", 22000)
+    eq.marker = Marker(symbol="none")
+    equity.series.append(eq)
+    _date_axis(equity)
+    equity.width, equity.height = FULL_WIDTH_CM, 9
+    ws.add_chart(equity, f"A{anchor_row}")
+
+    dd = AreaChart()
+    dd.title = "Drawdown from peak"
+    dd.y_axis.number_format = "$#,##0"
+    dds = _named_series(placeholder, "Chart_SelDD", "D55E00", 9525)
+    dds.graphicalProperties.solidFill = "F4B183"
+    dd.series.append(dds)
+    _date_axis(dd)
+    dd.width, dd.height = FULL_WIDTH_CM, 5
+    ws.add_chart(dd, f"A{anchor_row + 18}")
+
+    overlay = LineChart()
+    overlay.title = "PnL by year (trading-day overlay)"
+    overlay.y_axis.number_format = "$#,##0"
+    overlay.display_blanks = "gap"
+    overlay.x_axis.tickLblSkip = 20
+    overlay.x_axis.tickMarkSkip = 20
+    overlay.x_axis.delete = False
+    overlay.y_axis.delete = False
+    for j, color in enumerate(YEAR_LINE_GREYS):
+        s = Series(Reference(calc_ws, min_col=18 + j, min_row=1, max_row=262), title_from_data=True)
+        s.graphicalProperties.line.solidFill = color
+        s.graphicalProperties.line.width = 12700
+        s.marker = Marker(symbol="none")
+        s.smooth = False
+        overlay.series.append(s)
+    sel = Series(Reference(calc_ws, min_col=59, min_row=1, max_row=262), title_from_data=True)  # BG
+    sel.graphicalProperties.line.solidFill = "000000"
+    sel.graphicalProperties.line.width = 31750
+    sel.marker = Marker(symbol="none")
+    sel.smooth = False
+    overlay.series.append(sel)
+    overlay.set_categories(Reference(calc_ws, min_col=17, min_row=2, max_row=262))  # Q
+    overlay.legend.position = "b"
+    overlay.width, overlay.height = 15, 9
+    ws.add_chart(overlay, f"A{anchor_row + 28}")
+
+    _build_bar_helpers(calc_ws)
+    bars = BarChart()
+    bars.type = "col"
+    bars.grouping = "clustered"
+    bars.overlap = 100
+    bars.gapWidth = 60
+    bars.title = "Selected metric by contract month"
+    for col, color in ((154, "BFBFBF"), (155, "0072B2")):  # EX, EY
+        s = Series(Reference(calc_ws, min_col=col, min_row=1, max_row=1 + len(MONTHS)), title_from_data=True)
+        s.graphicalProperties.solidFill = color
+        s.graphicalProperties.line.noFill = True
+        bars.series.append(s)
+    bars.set_categories(Reference(calc_ws, min_col=153, min_row=2, max_row=1 + len(MONTHS)))  # EW
+    bars.x_axis.delete = False
+    bars.y_axis.delete = False
+    bars.legend = None
+    bars.width, bars.height = 15, 9
+    ws.add_chart(bars, f"F{anchor_row + 28}")

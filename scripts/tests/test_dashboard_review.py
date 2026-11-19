@@ -62,3 +62,20 @@ def test_print_area_and_gridlines(dash):
     assert dash.print_area.startswith("'Dashboard'!$A$17")
     assert dash.sheet_view.showGridLines is False
     assert dash.freeze_panes == "A3"
+
+
+def test_review_charts(dash):
+    charts = dash._charts
+    assert len(charts) == 4
+    plotted = [s.val.numRef.f for ch in charts for s in ch.series]
+    assert f"{CALC_SHEET}!Chart_SelEquity" in plotted
+    assert f"{CALC_SHEET}!Chart_SelDD" in plotted
+    assert any("$BG$" in f for f in plotted)
+    bars = next(ch for ch in charts if any("$EX$" in s.val.numRef.f for s in ch.series))
+    assert len(bars.series) == 2 and bars.overlap == 100
+    assert any("$EY$" in s.val.numRef.f for s in bars.series)
+
+
+def test_only_the_period_chart_names_remain():
+    from build_dashboard import chart_range_names
+    assert set(chart_range_names()) == {"Chart_SelDates", "Chart_SelEquity", "Chart_SelDD"}
