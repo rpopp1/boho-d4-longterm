@@ -73,7 +73,10 @@ def isolated_workbook(path: Path, manual_calc: bool = False):
                 candidate.Worksheets(1).Name  # detect a disconnected handle now
                 # OneDrive-synced files open with AutoSave on, even under
                 # automation: a failed run's half-applied edits would be saved.
-                candidate.AutoSaveOn = False
+                # A local (non-cloud) file refuses the setter; it can't
+                # AutoSave anyway, so only an AutoSave still on is an error.
+                if candidate.AutoSaveOn:
+                    candidate.AutoSaveOn = False
             except Exception:
                 try:
                     candidate.Close(SaveChanges=False)

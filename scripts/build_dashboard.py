@@ -40,6 +40,9 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.chart.data_source import AxDataSource, NumRef
+from openpyxl.chart.series import SeriesLabel, StrRef
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from config_map import CONFIG_MONTH_COLUMNS
@@ -55,19 +58,27 @@ from multi_month import MONTHS
 # defect class.
 PADDED_LAST_ROW = 3001
 
-# Largest row common to ALL 8 months' currently-real data -- used only for
-# the portfolio-level (cross-month, row-aligned) staging block, where every
-# month must contribute the same date range. Computed dynamically at the
-# start of main() via compute_common_real_last_row(), never hand-set: a
-# hardcoded value silently goes stale and grows more wrong every day new
-# trading rows get appended without a rebuild -- exactly what happened to
-# the 2026-08-14 build (hardcoded at 1392), found ~3 months/67 rows stale on
-# 2026-11-16. None here is a sentinel so any code path that runs before
-# main() populates it fails loudly instead of silently reusing a stale
-# number.
-COMMON_REAL_LAST_ROW = None
+# Auto-extension. Dashboard_Calc is pre-filled with formulas down to
+# PADDED_LAST_ROW (about the end of 2032 at ~252 trading days a year), so
+# rows pasted after a build are picked up with no rebuild. The two earlier
+# designs both went stale: a hand-set last row (the 2026-08-14 build, found
+# ~3 months stale on 2026-11-16) and a last row computed at build time
+# (stopped at 11/16 while data reached 11/18). Column P flags the rows where
+# all 8 months hold a real date; unused rows carry zeros, Y1 counts the rows
+# in use and every mean/variance divides by it, so unused rows change
+# nothing. Charts plot named ranges that end at row 1 + Y1.
+CALC_SHEET = "Dashboard_Calc"
+VALID_COL = "P"
+ROWS_IN_USE = f"{CALC_SHEET}!$Y$1"
+LATEST_YEAR = f"{CALC_SHEET}!$Y$2"
 
-YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
+# Calendar-Year tables: one row per year from the start of the data through
+# 2032 (where row 3001 runs out). A year's row stays blank until data for it
+# exists. The PnL-by-year chart shows the latest CHART_YEAR_COUNT years.
+FIRST_YEAR = 2021
+LAST_TABLE_YEAR = 2032
+TABLE_YEARS = list(range(FIRST_YEAR, LAST_TABLE_YEAR + 1))
+CHART_YEAR_COUNT = 6
 MAX_DAY_INDEX = 260  # comfortably above any year's ~252 trading days
 
 # Dashboard_Calc column layout for the per-month, year-reset cumulative/peak/
@@ -123,43 +134,26 @@ def config_tier_cell(month: str, row: int) -> str:
     return f"Config!{CONFIG_MONTH_COLUMNS[month]}{row}"
 
 
-def _find_last_real_row(data_wb, month: str) -> int:
-    """Last row in <month>'s Position Model tab whose column A holds a real
-    trading date, using the same >DATE(2015,1,1) convention the Dashboard's
-    own Cockpit 'As Of' formula uses to skip unused template padding (which
-    reads back as a literal 0 -- Excel's 1899-12-30 epoch -- not a blank)."""
-    ws = data_wb[f"Position Model - {month}"]
-    last_row = 1
-    for row in ws.iter_rows(min_row=2, max_row=PADDED_LAST_ROW, min_col=1, max_col=1):
-        cell = row[0]
-        v = cell.value
-        if isinstance(v, datetime) and v.year >= 2015:
-            last_row = cell.row
-    return last_row
+def calc_range(col: str) -> str:
+    """Absolute Dashboard_Calc range over every pre-filled row."""
+    return f"{CALC_SHEET}!${col}$2:${col}${PADDED_LAST_ROW}"
 
 
-def compute_common_real_last_row(target_file: Path) -> int:
-    """Dynamically determines COMMON_REAL_LAST_ROW from the live file's own
-    cached values, instead of a hand-set constant that silently goes stale
-    as more trading days get appended (see the module-level comment on
-    COMMON_REAL_LAST_ROW). Requires the file to carry cached formula results
-    for column A of each Position Model tab -- true under normal day-to-day
-    use, since Excel recalculates and caches on every open/edit/save."""
-    data_wb = openpyxl.load_workbook(target_file, data_only=True, read_only=True)
-    try:
-        last_rows = {month: _find_last_real_row(data_wb, month) for month in MONTHS}
-    finally:
-        data_wb.close()
-    common = min(last_rows.values())
-    if len(set(last_rows.values())) > 1:
-        print(
-            f"Per-month last real row differs: {last_rows} -- using the "
-            f"minimum ({common}) so every month contributes the same date "
-            "range to the portfolio rollup."
-        )
-    else:
-        print(f"All 8 months' last real row agrees: {common}.")
-    return common
+def dynamic_range_name(col: str, sheet: str = CALC_SHEET) -> str:
+    """Formula text for a range that starts at row 2 and stops at the last
+    row in use (row 1 + Dashboard_Calc!Y1). INDEX, not OFFSET, so the name
+    is non-volatile."""
+    ref = f"'{sheet}'" if " " in sheet else sheet
+    return f"{ref}!${col}$2:INDEX({ref}!${col}$2:${col}${PADDED_LAST_ROW},{ROWS_IN_USE})"
+
+
+def _mean_and_variance(rng: str) -> tuple[str, str]:
+    """Population mean/variance over the rows in use. Unused rows hold 0, so
+    SUM is unaffected; the variance weights each squared deviation by the
+    row's in-use flag so unused rows add nothing."""
+    mean = f"SUM({rng})/{ROWS_IN_USE}"
+    var = f"SUMPRODUCT({calc_range(VALID_COL)}*({rng}-({mean}))^2)/{ROWS_IN_USE}"
+    return mean, var
 
 
 # ---------------------------------------------------------------------------
@@ -173,18 +167,19 @@ def compute_common_real_last_row(target_file: Path) -> int:
 # formulas (BS active-to-inactive transition) with one extra COUNTIFS/
 # SUMIFS year criterion pulled from that month's own live CO column.
 # ---------------------------------------------------------------------------
+# `year` in these builders is a cell reference (the table row's own Year
+# cell, e.g. "$A12"), so a table row follows whatever year it displays.
+# Unused Dashboard_Calc rows have Year 0, so a year filter skips them.
 def _dc_daily_range(month: str) -> str:
-    col = get_column_letter(2 + MONTHS.index(month))
-    return f"Dashboard_Calc!${col}$2:${col}${COMMON_REAL_LAST_ROW}"
+    return calc_range(get_column_letter(2 + MONTHS.index(month)))
 
 
 def _dc_year_range() -> str:
-    return f"Dashboard_Calc!$A$2:$A${COMMON_REAL_LAST_ROW}"
+    return calc_range("A")
 
 
 def _dc_yeardd_range(month: str) -> str:
-    col = get_column_letter(YEARDD_FIRST_COL + MONTHS.index(month))
-    return f"Dashboard_Calc!${col}$2:${col}${COMMON_REAL_LAST_ROW}"
+    return calc_range(get_column_letter(YEARDD_FIRST_COL + MONTHS.index(month)))
 
 
 def _year_filtered_mean(month: str, year: int) -> str:
@@ -287,22 +282,26 @@ def build_year_month_table(
     style_header_row(ws, col_row, 1, last_col)
 
     first_row = col_row + 1
-    for j, year in enumerate(YEARS):
+    for j, year in enumerate(TABLE_YEARS):
         r = first_row + j
-        ws.cell(row=r, column=1, value=year)
+        # The row shows its year (and its numbers) once the data reaches it.
+        ws.cell(row=r, column=1, value=f'=IF({year}<={LATEST_YEAR},{year},"")')
+        year_ref = f"$A{r}"
         for i, month in enumerate(MONTHS):
             col = 2 + i
-            ws.cell(row=r, column=col, value=cell_formula_fn(month, year))
+            body = cell_formula_fn(month, year_ref).removeprefix("=")
+            ws.cell(row=r, column=col, value=f'=IF({year_ref}="","",{body})')
             ws.cell(row=r, column=col).number_format = number_format
         if total_col:
             first_month_col = get_column_letter(2)
             last_month_col = get_column_letter(1 + len(MONTHS))
             tc = 2 + len(MONTHS)
-            ws.cell(row=r, column=tc, value=f"=SUM({first_month_col}{r}:{last_month_col}{r})")
+            ws.cell(row=r, column=tc,
+                    value=f'=IF({year_ref}="","",SUM({first_month_col}{r}:{last_month_col}{r}))')
             ws.cell(row=r, column=tc).number_format = number_format
             ws.cell(row=r, column=tc).font = BOLD
 
-    last_row = first_row + len(YEARS) - 1
+    last_row = first_row + len(TABLE_YEARS) - 1
     if color_scale == "diverging3":
         ws.conditional_formatting.add(
             f"B{first_row}:{get_column_letter(1 + len(MONTHS))}{last_row}",
@@ -357,9 +356,19 @@ def build_calc_sheet(wb):
     ws["M1"] = "Portfolio Daily Drawdown"
     ws["N1"] = "Portfolio Max Drawdown"
     ws["O1"] = "Portfolio Calendar-Year Cumulative PnL"
+    ws[f"{VALID_COL}1"] = "Row In Use (all 8 months dated)"
+    ws["X1"] = "Rows In Use"
+    ws["Y1"] = f"=SUM({VALID_COL}2:{VALID_COL}{PADDED_LAST_ROW})"
+    ws["X2"] = "Latest Year"
+    ws["Y2"] = f"=MAX(A2:A{PADDED_LAST_ROW})"
 
-    for r in range(2, COMMON_REAL_LAST_ROW + 1):
-        ws.cell(row=r, column=1, value=f"={pm('January')}!CO{r}")
+    for r in range(2, PADDED_LAST_ROW + 1):
+        # In use once every month's tab shows a real trading date on this row
+        # (the same >DATE(2015,1,1) test the Snapshot's As Of uses). Rows
+        # past the data are 0 and contribute nothing anywhere below.
+        dated = ",".join(f"{pm(m)}!A{r}>DATE(2015,1,1)" for m in MONTHS)
+        ws[f"{VALID_COL}{r}"] = f"=IFERROR(IF(AND({dated}),1,0),0)"
+        ws.cell(row=r, column=1, value=f"=IF(${VALID_COL}{r}=1,{pm('January')}!CO{r},0)")
         for i, month in enumerate(MONTHS):
             # ISNUMBER-guarded (not just IFERROR): BT genuinely errors during
             # each month's early warm-up rows (expected/pre-existing, per
@@ -374,7 +383,7 @@ def build_calc_sheet(wb):
             # IF/IFERROR-on-a-range implicit-intersection issue documented
             # in the performance-table formulas below.
             src = f"{pm(month)}!BT{r}"
-            ws.cell(row=r, column=2 + i, value=f"=IF(ISNUMBER({src}),{src},0)")
+            ws.cell(row=r, column=2 + i, value=f"=IF(${VALID_COL}{r}=1,IF(ISNUMBER({src}),{src},0),0)")
         daily_range = f"B{r}:I{r}"
         ws.cell(row=r, column=10, value=f"=SUM({daily_range})")
         if r == 2:
@@ -406,7 +415,7 @@ def build_calc_sheet(wb):
     ws["AB1"] = "Selected Series Cumulative PnL"
     ws["AC1"] = "Selected Series Calendar-Year Cumulative PnL"
     daily_choices = ",".join(["J{r}"] + [get_column_letter(2 + i) + "{r}" for i in range(len(MONTHS))])
-    for r in range(2, COMMON_REAL_LAST_ROW + 1):
+    for r in range(2, PADDED_LAST_ROW + 1):
         ws.cell(row=r, column=27, value=f"=CHOOSE($Z$1,{daily_choices.format(r=r)})")
         if r == 2:
             ws.cell(row=r, column=28, value="=AA2")
@@ -425,15 +434,18 @@ def build_calc_sheet(wb):
     # many rows have that year) sufficient to locate any day k within that
     # year -- no two-condition array lookup needed.
     ws["Q1"] = "Day Index"
-    year_range = f"$A$2:$A${COMMON_REAL_LAST_ROW}"
-    cum_range = f"$AC$2:$AC${COMMON_REAL_LAST_ROW}"
-    for j, year in enumerate(YEARS):
-        col = 18 + j  # R=18 .. W=23
-        ws.cell(row=1, column=col, value=year)
+    year_range = f"$A$2:$A${PADDED_LAST_ROW}"
+    cum_range = f"$AC$2:$AC${PADDED_LAST_ROW}"
+    # The latest CHART_YEAR_COUNT years, oldest first (R=18 .. W=23): the
+    # window slides forward on its own when the first day of a new year is
+    # pasted, so the newest (black, current-year) line is always last.
+    for j in range(CHART_YEAR_COUNT):
+        col = 18 + j
+        ws.cell(row=1, column=col, value=f"=$Y$2-{CHART_YEAR_COUNT - 1 - j}")
     for k in range(0, MAX_DAY_INDEX + 1):
         r = 2 + k
         ws.cell(row=r, column=17, value=k)
-        for j, year in enumerate(YEARS):
+        for j in range(CHART_YEAR_COUNT):
             col = 18 + j
             col_letter = get_column_letter(col)
             year_cell = f"{col_letter}$1"
@@ -467,7 +479,7 @@ def build_calc_sheet(wb):
         ws.cell(row=1, column=YEARCUM_FIRST_COL + i, value=f"{month} Year-Reset Cumulative PnL")
         ws.cell(row=1, column=YEARPEAK_FIRST_COL + i, value=f"{month} Year-Reset Running Peak")
         ws.cell(row=1, column=YEARDD_FIRST_COL + i, value=f"{month} Year-Reset Max Drawdown (running)")
-        for r in range(2, COMMON_REAL_LAST_ROW + 1):
+        for r in range(2, PADDED_LAST_ROW + 1):
             if r == 2:
                 ws.cell(row=r, column=YEARCUM_FIRST_COL + i, value=f"={daily_col}2")
                 ws.cell(row=r, column=YEARPEAK_FIRST_COL + i, value=f"={yc_col}2")
@@ -486,7 +498,32 @@ def build_calc_sheet(wb):
                     value=f"=IF(A{r}<>A{r - 1},MIN(0,{yc_col}{r}-{yp_col}{r}),MIN({yd_col}{r - 1},{yc_col}{r}-{yp_col}{r}))",
                 )
 
+    # Sheet-scoped names the date-axis charts plot, each ending at the last
+    # row in use, so the charts grow as rows are pasted.
+    for name, text in chart_range_names().items():
+        ws.defined_names[name] = DefinedName(name, attr_text=text)
+
     return ws
+
+
+def chart_range_names() -> dict[str, str]:
+    names = {"Chart_Dates": dynamic_range_name("A", "Position Model - January")}
+    for month in MONTHS:
+        names[f"Chart_{month}"] = dynamic_range_name("BV", f"Position Model - {month}")  # RA cumulative
+    names["Chart_Portfolio"] = dynamic_range_name("K")
+    names["Chart_Selected"] = dynamic_range_name("AB")
+    return names
+
+
+def _plot_name(series: Series, name: str) -> None:
+    """Point a chart series' values at a Dashboard_Calc-scoped name."""
+    series.val.numRef.f = f"{CALC_SHEET}!{name}"
+    series.val.numRef.numCache = None
+
+
+def _plot_categories(chart) -> None:
+    for series in chart.series:
+        series.cat = AxDataSource(numRef=NumRef(f=f"{CALC_SHEET}!Chart_Dates"))
 
 
 # ---------------------------------------------------------------------------
@@ -636,7 +673,7 @@ def build_dashboard_sheet(wb):
         by = f"{pm(month)}!$BY$2:$BY${PADDED_LAST_ROW}"
         # Sharpe/Sortino/Calmar are sourced from Dashboard_Calc's per-month
         # column (already IFERROR-cleaned cell-by-cell, confirmed 0 errors),
-        # NOT the raw source column, and use only AVERAGE/STDEV.P/COUNT or
+        # NOT the raw source column, and use only SUM/SUMPRODUCT and
         # bare-range comparison operators. IFERROR(multi-cell-range,0) used
         # as a sub-expression inside SUMPRODUCT was tested in isolation and
         # confirmed to perform row-based implicit intersection against the
@@ -646,19 +683,21 @@ def build_dashboard_sheet(wb):
         # the whole array, not a per-element cleanup. That bug, not a math
         # error, is what previously made every month's Sharpe/Sortino/Calmar
         # come out as exactly 0.
-        clean_col = get_column_letter(2 + i)
-        clean_rng = f"Dashboard_Calc!${clean_col}$2:${clean_col}${COMMON_REAL_LAST_ROW}"
+        clean_rng = calc_range(get_column_letter(2 + i))
 
         ws.cell(row=r, column=1, value=month)
         ws.cell(row=r, column=2, value=f"=LOOKUP(2,1/ISNUMBER({bv}),{bv})")
         ws.cell(row=r, column=2).number_format = CURRENCY_FMT
 
-        mean_cell = f"AVERAGE({clean_rng})"
-        sharpe = f"=IFERROR(({mean_cell})/STDEV.P({clean_rng})*SQRT(252),0)"
+        # Population mean / SD over the rows in use only (unused rows are 0;
+        # see _mean_and_variance) -- same result as AVERAGE/STDEV.P over the
+        # used rows, without a range that has to stop at a fixed row.
+        mean_cell, var = _mean_and_variance(clean_rng)
+        sharpe = f"=IFERROR(({mean_cell})/SQRT({var})*SQRT(252),0)"
         ws.cell(row=r, column=3, value=sharpe)
         ws.cell(row=r, column=3).number_format = RATIO_FMT
 
-        downside_var = f"SUMPRODUCT(({clean_rng}<0)*{clean_rng}^2)/COUNT({clean_rng})"
+        downside_var = f"SUMPRODUCT(({clean_rng}<0)*{clean_rng}^2)/{ROWS_IN_USE}"
         sortino = f"=IFERROR(({mean_cell})/SQRT({downside_var})*SQRT(252),0)"
         ws.cell(row=r, column=4, value=sortino)
         ws.cell(row=r, column=4).number_format = RATIO_FMT
@@ -718,13 +757,15 @@ def build_dashboard_sheet(wb):
 
     portfolio_row = perf_first_row + len(MONTHS)
     ws.cell(row=portfolio_row, column=1, value="Portfolio (Sum of 8 Months)").font = BOLD
-    calc_daily = f"Dashboard_Calc!$J$2:$J${COMMON_REAL_LAST_ROW}"
-    calc_cum = f"Dashboard_Calc!$K$2:$K${COMMON_REAL_LAST_ROW}"
-    calc_maxdd = f"Dashboard_Calc!$N$2:$N${COMMON_REAL_LAST_ROW}"
+    # Cumulative and running-max-drawdown columns carry their last value flat
+    # through the unused rows, so the last numeric value is still the latest.
+    calc_daily = calc_range("J")
+    calc_cum = calc_range("K")
+    calc_maxdd = calc_range("N")
     ws.cell(row=portfolio_row, column=2, value=f"=LOOKUP(2,1/ISNUMBER({calc_cum}),{calc_cum})")
     ws.cell(row=portfolio_row, column=2).number_format = CURRENCY_FMT
-    p_mean = f"AVERAGE({calc_daily})"
-    p_sharpe = f"=IFERROR(({p_mean})/STDEV.P({calc_daily})*SQRT(252),0)"
+    p_mean, p_var = _mean_and_variance(calc_daily)
+    p_sharpe = f"=IFERROR(({p_mean})/SQRT({p_var})*SQRT(252),0)"
     ws.cell(row=portfolio_row, column=3, value=p_sharpe)
     ws.cell(row=portfolio_row, column=3).number_format = RATIO_FMT
     # Bare-range comparison/arithmetic operators only (no IFERROR/IF wrapping
@@ -732,7 +773,7 @@ def build_dashboard_sheet(wb):
     # calc_daily is already error-free by construction (Dashboard_Calc's J
     # column sums 8 already-cleaned per-month columns), so no cleansing is
     # even needed here.
-    p_downside_var = f"SUMPRODUCT(({calc_daily}<0)*{calc_daily}^2)/COUNT({calc_daily})"
+    p_downside_var = f"SUMPRODUCT(({calc_daily}<0)*{calc_daily}^2)/{ROWS_IN_USE}"
     p_sortino = f"=IFERROR(({p_mean})/SQRT({p_downside_var})*SQRT(252),0)"
     ws.cell(row=portfolio_row, column=4, value=p_sortino)
     ws.cell(row=portfolio_row, column=4).number_format = RATIO_FMT
@@ -850,29 +891,29 @@ def build_cumulative_pnl_chart(ws, wb, anchor: str) -> None:
     chart.x_axis.delete = False
     chart.y_axis.delete = False
 
-    dates_ws = wb["Position Model - January"]
-    cats = Reference(dates_ws, min_col=1, min_row=2, max_row=COMMON_REAL_LAST_ROW)
+    # Each series is built on a placeholder range, then pointed at its named
+    # range (chart_range_names), which ends at the last row in use.
+    calc_ws = wb[CALC_SHEET]
+    placeholder = Reference(calc_ws, min_col=11, min_row=2, max_row=3)
 
     for month in MONTHS:
-        src_ws = wb[f"Position Model - {month}"]
-        data = Reference(src_ws, min_col=74, min_row=2, max_row=COMMON_REAL_LAST_ROW)  # BV=74
-        series = Series(data, title=month)
+        series = Series(placeholder, title=month)
+        _plot_name(series, f"Chart_{month}")
         series.graphicalProperties.line.solidFill = MONTH_COLORS[month]
         series.graphicalProperties.line.width = 15000
         series.marker = Marker(symbol="none")
         series.smooth = False
         chart.series.append(series)
 
-    calc_ws = wb["Dashboard_Calc"]
-    port_data = Reference(calc_ws, min_col=11, min_row=2, max_row=COMMON_REAL_LAST_ROW)  # K
-    port_series = Series(port_data, title="Portfolio")
+    port_series = Series(placeholder, title="Portfolio")
+    _plot_name(port_series, "Chart_Portfolio")
     port_series.graphicalProperties.line.solidFill = PORTFOLIO_COLOR
     port_series.graphicalProperties.line.width = 25000
     port_series.marker = Marker(symbol="none")
     port_series.smooth = False
     chart.series.append(port_series)
 
-    chart.set_categories(cats)
+    _plot_categories(chart)
     ws.add_chart(chart, anchor)
 
 
@@ -921,16 +962,18 @@ def build_pnl_by_year_chart(ws, wb, anchor: str) -> None:
     # illegible, overlapping tick label -- skip to one label every 20 days.
     chart.x_axis.tickLblSkip = 20
     chart.x_axis.tickMarkSkip = 20
-    # Sequential light->dark blue ramp for the five completed years plus black
-    # for the current (partial) year, so the in-progress line reads as the
-    # reference/foreground line against the historical backdrop.
+    # Sequential light->dark ramp for the earlier years plus black for the
+    # latest (usually partial) year, so the in-progress line reads as the
+    # reference/foreground line against the historical backdrop. The year
+    # headers (R1:W1) are formulas, so the window slides with the data.
     year_line_colors = ["9EC5E0", "6BAED6", "3182BD", "08519C", "54278F", "000000"]
-    for j, year in enumerate(YEARS):
+    assert len(year_line_colors) == CHART_YEAR_COUNT
+    for j in range(CHART_YEAR_COUNT):
         col = 18 + j
         data = Reference(calc_ws, min_col=col, min_row=1, max_row=2 + MAX_DAY_INDEX)
         series = Series(data, title_from_data=True)
         series.graphicalProperties.line.solidFill = year_line_colors[j]
-        series.graphicalProperties.line.width = 20000 if year != YEARS[-1] else 28000
+        series.graphicalProperties.line.width = 20000 if j != CHART_YEAR_COUNT - 1 else 28000
         series.marker = Marker(symbol="none")
         series.smooth = False
         chart.series.append(series)
@@ -957,18 +1000,17 @@ def build_selected_series_chart(ws, wb, anchor: str) -> None:
     chart.x_axis.delete = False
     chart.y_axis.delete = False
 
-    dates_ws = wb["Position Model - January"]
-    cats = Reference(dates_ws, min_col=1, min_row=2, max_row=COMMON_REAL_LAST_ROW)
-
-    calc_ws = wb["Dashboard_Calc"]
-    data = Reference(calc_ws, min_col=28, min_row=1, max_row=COMMON_REAL_LAST_ROW)  # AB, header included
-    series = Series(data, title_from_data=True)
+    calc_ws = wb[CALC_SHEET]
+    placeholder = Reference(calc_ws, min_col=28, min_row=2, max_row=3)  # AB
+    series = Series(placeholder)
+    series.tx = SeriesLabel(strRef=StrRef(f"{CALC_SHEET}!$AB$1"))
+    _plot_name(series, "Chart_Selected")
     series.graphicalProperties.line.solidFill = PORTFOLIO_COLOR
     series.graphicalProperties.line.width = 20000
     series.marker = Marker(symbol="none")
     series.smooth = False
     chart.series.append(series)
-    chart.set_categories(cats)
+    _plot_categories(chart)
     ws.add_chart(chart, anchor)
 
 
@@ -977,10 +1019,6 @@ def main(target_file: Path) -> None:
         raise SystemExit(f"Workbook not found: {target_file}")
     if target_file.suffix.lower() != ".xlsx":
         raise SystemExit(f"Expected an .xlsx workbook, got: {target_file.name}")
-
-    global COMMON_REAL_LAST_ROW
-    COMMON_REAL_LAST_ROW = compute_common_real_last_row(target_file)
-    print(f"COMMON_REAL_LAST_ROW computed dynamically: {COMMON_REAL_LAST_ROW}")
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_path = target_file.with_name(
