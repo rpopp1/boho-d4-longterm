@@ -171,9 +171,16 @@ def _year_month_avgloss_formula(month: str, year: int) -> str:
     return f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{yr_raw},{year},{trade_pnl},"<0"),0)'
 
 
+def _profit_factor(gross_win: str, gross_loss: str) -> str:
+    """Gross win / |gross loss|; "n/a" when there were wins but no losses
+    (undefined, not 0), 0 when there were no trades."""
+    return (f'=IFERROR(IF(({gross_loss})=0,IF(({gross_win})>0,"n/a",0),'
+            f'({gross_win})/ABS({gross_loss})),0)')
+
+
 def _year_month_profitfactor_formula(month: str, year: int) -> str:
     _, _, _, _, _, _, gross_win, gross_loss = _year_month_trade_parts(month, year)
-    return f"=IFERROR(({gross_win})/ABS({gross_loss}),0)"
+    return _profit_factor(gross_win, gross_loss)
 
 
 def _year_month_tradecount_formula(month: str, year: int) -> str:
@@ -249,7 +256,7 @@ def month_inception_formula(metric: str, month: str) -> str:
         "winrate": f"=IFERROR(({wins})/({trade_count}),0)",
         "avgwin": f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{trade_pnl},">0"),0)',
         "avgloss": f'=IFERROR(AVERAGEIFS({trade_pnl},{bs_cur},1,{bs_next},"<>1",{trade_pnl},"<0"),0)',
-        "pf": f"=IFERROR(({gross_win})/ABS({gross_loss}),0)",
+        "pf": _profit_factor(gross_win, gross_loss),
         "trades": f"={trade_count}",
     }[metric]
 

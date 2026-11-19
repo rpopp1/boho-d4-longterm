@@ -28,7 +28,8 @@ def test_metrics_order_and_labels():
 
 def test_month_inception_formulas_match_current_table():
     for key in KEYS:
-        assert month_inception_formula(key, "December") == EXPECTED["dec"][key], key
+        if key != "pf":  # changed on purpose 2026-11-19, see the test below
+            assert month_inception_formula(key, "December") == EXPECTED["dec"][key], key
 
 
 def test_portfolio_inception_formulas_match_current_table():
@@ -131,3 +132,11 @@ def test_year_options_name_stops_at_the_latest_year(calc):
     # A workbook-level name so the Dashboard's Year dropdown has no blank rows.
     dn = calc.parent.defined_names["YearOptions"]
     assert dn.attr_text == "Dashboard_Calc!$EZ$2:INDEX(Dashboard_Calc!$EZ$2:$EZ$14,Dashboard_Calc!$Y$2-2021+2)"
+
+
+def test_profit_factor_is_na_when_there_were_wins_but_no_losses():
+    # Approved by the user 2026-11-19: no losing trades -> "n/a", not 0.00.
+    for f in (month_inception_formula("pf", "December"), month_year_formula("pf", "May", "FC$1")):
+        assert f.startswith("=IFERROR(IF(") and ',IF(' in f and '"n/a",0)' in f
+        # Same win/loss sums as before when there are losses.
+        assert "SUMIFS(" in f and "/ABS(SUMIFS(" in f
