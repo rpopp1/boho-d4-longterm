@@ -36,6 +36,8 @@ _LABEL = {k: label for k, label, _ in METRICS}
 _FMT = {k: fmt for k, _, fmt in METRICS}
 _TILE_FILL = PatternFill("solid", fgColor="F2F2F2")
 _OUTLINE = Side(style="medium", color="1F3864")
+TILE_MILLIONS_FMT = '$#,##0.00,,"M";($#,##0.00,,"M")'
+BAR_AXIS_FMT = '[>=1000]#,##0;[<=-1000]-#,##0;0.00'
 
 
 def _abs(cell: str) -> str:
@@ -75,7 +77,7 @@ def _tiles(ws, row: int) -> None:
         label = ws.cell(row=row, column=c, value=_LABEL[key])
         value = ws.cell(row=row + 1, column=c, value="=" + matrix_lookup(str(k), MONTH_IDX, PERIOD_IDX))
         label.font, value.font = TILE_LABEL_FONT, TILE_VALUE_FONT
-        value.number_format = _heat_fmt(_FMT[key])
+        value.number_format = TILE_MILLIONS_FMT if _FMT[key] == CURRENCY_FMT else _FMT[key]
         for cell in (label, value):
             cell.fill = _TILE_FILL
             cell.alignment = Alignment(horizontal="center")
@@ -116,7 +118,7 @@ def _year_table(ws, row: int) -> int:
     # Outline the selected month column (header text = Month dropdown) and year row.
     border = DifferentialStyle(border=Border(left=_OUTLINE, right=_OUTLINE, top=_OUTLINE, bottom=_OUTLINE))
     ws.conditional_formatting.add(body, Rule(
-        type="expression", formula=[f"B${header}={_abs(MONTH_CELL)}"], dxf=border))
+        type="expression", formula=[f'AND($A{first}<>"",B${header}={_abs(MONTH_CELL)})'], dxf=border))
     ws.conditional_formatting.add(f"A{first}:J{last}", Rule(
         type="expression", formula=[f"$A{first}={_abs(YEAR_CELL)}"], dxf=border))
     return last
@@ -254,6 +256,7 @@ def build_review_charts(ws, wb, anchor_row: int) -> None:
     dds.graphicalProperties.solidFill = "F4B183"
     dd.series.append(dds)
     _date_axis(dd)
+    dd.x_axis.delete = True  # dates are on the equity chart directly above
     dd.width, dd.height = FULL_WIDTH_CM, 5
     ws.add_chart(dd, f"A{anchor_row + 18}")
 
@@ -299,5 +302,6 @@ def build_review_charts(ws, wb, anchor_row: int) -> None:
     bars.x_axis.delete = False
     bars.y_axis.delete = False
     bars.legend = None
+    bars.y_axis.number_format = BAR_AXIS_FMT
     bars.width, bars.height = 15, 9
     ws.add_chart(bars, f"F{anchor_row + 28}")

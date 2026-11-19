@@ -79,3 +79,29 @@ def test_review_charts(dash):
 def test_only_the_period_chart_names_remain():
     from build_dashboard import chart_range_names
     assert set(chart_range_names()) == {"Chart_SelDates", "Chart_SelEquity", "Chart_SelDD"}
+
+
+def test_regime_highlight_fills_use_the_differential_background_color(dash):
+    # Conditional-format solid fills only render from bgColor.
+    rules = [r for cf in dash.conditional_formatting if "E6" in str(cf.sqref) for r in cf.rules]
+    fills = [r.dxf.fill for r in rules if r.dxf is not None and r.dxf.fill is not None]
+    assert fills and all(f.bgColor.rgb.endswith(("D55E00", "F4C7A8")) for f in fills)
+
+
+def test_dollar_tiles_use_millions_format(dash):
+    assert dash["A21"].number_format == '$#,##0.00,,"M";($#,##0.00,,"M")'
+    assert dash["D21"].number_format == '$#,##0.00,,"M";($#,##0.00,,"M")'
+
+
+def test_month_outline_skips_empty_year_rows(dash):
+    first = REVIEW_ANCHORS["year_table"] + 2
+    rules = [r for cf in dash.conditional_formatting for r in cf.rules if r.type == "expression"]
+    assert any(f'AND($A{first}<>"",B${first - 1}=$B$18)' in r.formula[0] for r in rules)
+
+
+def test_chart_axes_are_readable(dash):
+    charts = dash._charts
+    bars = next(ch for ch in charts if any("$EX$" in s.val.numRef.f for s in ch.series))
+    assert bars.y_axis.number_format.formatCode == '[>=1000]#,##0;[<=-1000]-#,##0;0.00'
+    dd = next(ch for ch in charts if any("Chart_SelDD" in s.val.numRef.f for s in ch.series))
+    assert dd.x_axis.delete is True

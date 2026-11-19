@@ -147,7 +147,7 @@ def build_today_section(ws, first_row: int = 4) -> int:
         end_type="num", end_value=2.5, end_color=HEAT_POS))
     ws.conditional_formatting.add(f"E{first}:E{last}", CellIsRule(
         operator="equal", formula=['"Extreme"'],
-        fill=PatternFill("solid", fgColor=DIVERGING_NEG), font=Font(color="FFFFFF", bold=True)))
+        fill=PatternFill(fill_type="solid", bgColor=DIVERGING_NEG), font=Font(color="FFFFFF", bold=True)))
     ws.conditional_formatting.add(f"E{first}:E{last}", CellIsRule(
-        operator="equal", formula=['"High"'], fill=PatternFill("solid", fgColor="F4C7A8")))
+        operator="equal", formula=['"High"'], fill=PatternFill(fill_type="solid", bgColor="F4C7A8")))
     return port
