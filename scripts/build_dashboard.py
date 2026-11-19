@@ -56,6 +56,9 @@ from dashboard_metrics import (  # noqa: F401  (re-exported for tests and caller
     _year_month_tradecount_formula, _year_month_winrate_formula, calc_range, config_tier_cell,
     dynamic_range_name, METRIC_KEYS, month_inception_formula, pm, portfolio_inception_formula,
 )
+from dashboard_metrics import (
+    PORT_YEARDD_COL, PORT_YEARPEAK_COL, build_controls, build_metric_matrix,
+)
 from dashboard_style import (
     BOLD, CURRENCY_FMT, DIVERGING_MID, DIVERGING_NEG, DIVERGING_POS, HEADER_FILL, HEADER_FONT,
     MONTH_COLORS, PCT_FMT, PORTFOLIO_COLOR, RATIO_FMT, SECTION_FONT, section_title, style_header_row,
@@ -206,8 +209,7 @@ def build_calc_sheet(wb):
     # (all single-cell references per row, so this is exactly as safe as the
     # other single-cell CHOOSE/IF idioms already used in this project; no
     # multi-cell range is ever wrapped in IF/IFERROR/CHOOSE here).
-    selector_list_literal = '{' + ','.join(f'"{name}"' for name in SELECTOR_OPTIONS) + '}'
-    ws["Z1"] = f"=MATCH('Dashboard'!$O$2,{selector_list_literal},0)"
+    build_controls(ws)  # Z1:Z6 dropdown indices + Year option list
     ws["AA1"] = "Selected Series Daily PnL"
     ws["AB1"] = "Selected Series Cumulative PnL"
     ws["AC1"] = "Selected Series Calendar-Year Cumulative PnL"
@@ -294,6 +296,21 @@ def build_calc_sheet(wb):
                     row=r, column=YEARDD_FIRST_COL + i,
                     value=f"=IF(A{r}<>A{r - 1},MIN(0,{yc_col}{r}-{yp_col}{r}),MIN({yd_col}{r - 1},{yc_col}{r}-{yp_col}{r}))",
                 )
+
+    # Portfolio year-reset running peak / running max drawdown (BB:BC), same
+    # shape as the per-month AL/AT columns, for the Portfolio-by-year metrics.
+    ws[f"{PORT_YEARPEAK_COL}1"] = "Portfolio Year-Reset Running Peak"
+    ws[f"{PORT_YEARDD_COL}1"] = "Portfolio Year-Reset Max Drawdown (running)"
+    pk, dd = PORT_YEARPEAK_COL, PORT_YEARDD_COL
+    for r in range(2, PADDED_LAST_ROW + 1):
+        if r == 2:
+            ws[f"{pk}2"] = "=O2"
+            ws[f"{dd}2"] = f"=MIN(0,O2-{pk}2)"
+        else:
+            ws[f"{pk}{r}"] = f"=IF(A{r}<>A{r - 1},O{r},MAX({pk}{r - 1},O{r}))"
+            ws[f"{dd}{r}"] = f"=IF(A{r}<>A{r - 1},MIN(0,O{r}-{pk}{r}),MIN({dd}{r - 1},O{r}-{pk}{r}))"
+
+    build_metric_matrix(ws)
 
     # Sheet-scoped names the date-axis charts plot, each ending at the last
     # row in use, so the charts grow as rows are pasted.

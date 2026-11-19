@@ -267,3 +267,125 @@ def portfolio_inception_formula(metric: str) -> str:
         "maxdd": f"={max_dd}",
     }
     return formulas.get(metric, '="n/a"')
+
+
+# ---------------------------------------------------------------------------
+# Portfolio per calendar year. Same shapes as the per-month year builders,
+# on the portfolio daily column J and a portfolio year-reset drawdown (BB:BC).
+# ---------------------------------------------------------------------------
+PORT_YEARPEAK_COL = "BB"
+PORT_YEARDD_COL = "BC"
+
+
+def _filtered_stats(rng: str, year: str) -> tuple[str, str, str]:
+    yr = _dc_year_range()
+    days = f"SUMPRODUCT(({yr}={year})*1)"
+    mean = f"SUMPRODUCT(({yr}={year})*{rng})/{days}"
+    var = f"SUMPRODUCT(({yr}={year})*({rng}-({mean}))^2)/{days}"
+    down = f"SUMPRODUCT(({yr}={year})*({rng}<0)*{rng}^2)/{days}"
+    return mean, var, down
+
+
+def portfolio_year_formula(metric: str, year_ref: str) -> str:
+    """Portfolio `metric` for the calendar year in `year_ref`. Trade metrics
+    have no portfolio definition ("n/a"); the matrix sums Trade Count."""
+    yr, rng = _dc_year_range(), calc_range("J")
+    mean, var, down = _filtered_stats(rng, year_ref)
+    dd = calc_range(PORT_YEARDD_COL)
+    maxdd = f"IFERROR(INDEX({dd},MATCH({year_ref},{yr},0)+COUNTIF({yr},{year_ref})-1),0)"
+    return {
+        "pnl": f"=SUMPRODUCT(({yr}={year_ref})*{rng})",
+        "sharpe": f"=IFERROR(({mean})/SQRT({var})*SQRT(252),0)",
+        "sortino": f"=IFERROR(({mean})/SQRT({down})*SQRT(252),0)",
+        "calmar": f"=IFERROR(({mean})*252/ABS({maxdd}),0)",
+        "maxdd": f"={maxdd}",
+    }.get(metric, '="n/a"')
+
+
+# ---------------------------------------------------------------------------
+# Metric matrix: every metric x series x period in one hidden block, so the
+# Dashboard's tiles, year table, detail table and bar chart are all INDEX
+# lookups into figures built by the formulas above.
+#   metric k (0-based): header row k*11+1, series s (Portfolio=1) row k*11+1+s
+#   periods: FB = All (since inception), FC.. = TABLE_YEARS (row-1 headers)
+# ---------------------------------------------------------------------------
+MATRIX_LABEL_COL = 157  # FA
+MATRIX_FIRST_PERIOD_COL = 158  # FB
+MATRIX_BLOCK_ROWS = 11
+PERIODS = ["All"] + TABLE_YEARS
+MATRIX_LAST_COL = MATRIX_FIRST_PERIOD_COL + len(PERIODS) - 1  # FN
+MATRIX_LAST_ROW = MATRIX_BLOCK_ROWS * len(METRICS)  # 110
+MATRIX_RANGE = (f"{CALC_SHEET}!${get_column_letter(MATRIX_FIRST_PERIOD_COL)}$1:"
+                f"${get_column_letter(MATRIX_LAST_COL)}${MATRIX_LAST_ROW}")
+
+# Dashboard control cells (placed by the Performance Review builder).
+MONTH_CELL = "B18"
+YEAR_CELL = "D18"
+METRIC_CELL = "F18"
+ALL_YEARS = "All years"
+YEAR_OPTIONS_COL = "EZ"
+
+
+def _abs(cell: str) -> str:
+    col = "".join(ch for ch in cell if ch.isalpha())
+    return f"${col}${cell[len(col):]}"
+
+
+def matrix_address(metric: str, series: str, period) -> str:
+    row = METRIC_KEYS.index(metric) * MATRIX_BLOCK_ROWS + 1 + SERIES.index(series) + 1
+    return f"{get_column_letter(MATRIX_FIRST_PERIOD_COL + PERIODS.index(period))}{row}"
+
+
+def matrix_row(metric_index_expr: str, series_index_expr: str) -> str:
+    return f"(({metric_index_expr})-1)*{MATRIX_BLOCK_ROWS}+1+({series_index_expr})"
+
+
+def matrix_lookup(metric_index_expr: str, series_index_expr: str, period_index_expr: str) -> str:
+    return f"INDEX({MATRIX_RANGE},{matrix_row(metric_index_expr, series_index_expr)},{period_index_expr})"
+
+
+def build_metric_matrix(ws) -> None:
+    ws.cell(row=1, column=MATRIX_LABEL_COL, value="Metric Matrix")
+    for p, period in enumerate(PERIODS):
+        ws.cell(row=1, column=MATRIX_FIRST_PERIOD_COL + p, value=period)
+    for k, (key, label, _fmt) in enumerate(METRICS):
+        header = k * MATRIX_BLOCK_ROWS + 1
+        if k:
+            ws.cell(row=header, column=MATRIX_LABEL_COL, value=label)
+        for s, series in enumerate(SERIES, start=1):
+            r = header + s
+            ws.cell(row=r, column=MATRIX_LABEL_COL, value=f"{label} | {series}")
+            for p, period in enumerate(PERIODS):
+                col = MATRIX_FIRST_PERIOD_COL + p
+                letter = get_column_letter(col)
+                year_ref = f"{letter}$1"
+                if series == "Portfolio" and key == "trades":
+                    formula = f"=SUM({letter}{r + 1}:{letter}{r + len(MONTHS)})"
+                elif series == "Portfolio":
+                    formula = (portfolio_inception_formula(key) if period == "All"
+                               else portfolio_year_formula(key, year_ref))
+                else:
+                    formula = (month_inception_formula(key, series) if period == "All"
+                               else month_year_formula(key, series, year_ref))
+                if period != "All" and formula != '="n/a"':
+                    formula = f'=IF({year_ref}>{LATEST_YEAR},"",{formula.removeprefix("=")})'
+                ws.cell(row=r, column=col, value=formula)
+
+
+def build_controls(ws) -> None:
+    """Calc control cells the Dashboard dropdowns drive (Z1:Z6) and the Year
+    dropdown's option list (EZ2:EZ14)."""
+    series_list = "{" + ",".join(f'"{s}"' for s in SERIES) + "}"
+    metric_list = "{" + ",".join(f'"{label}"' for _, label, _ in METRICS) + "}"
+    month, year, metric = (f"Dashboard!{_abs(c)}" for c in (MONTH_CELL, YEAR_CELL, METRIC_CELL))
+    years = f"$A$2:$A${PADDED_LAST_ROW}"
+    ws["Z1"] = f"=MATCH({month},{series_list},0)"
+    ws["Z2"] = f'=IF({year}="{ALL_YEARS}",1,{year}-{FIRST_YEAR}+2)'
+    ws["Z3"] = f"=IF($Z$2=1,0,{year})"
+    ws["Z4"] = f"=IF($Z$3=0,1,MATCH($Z$3,{years},0))"
+    ws["Z5"] = f"=IF($Z$3=0,$Y$1,$Z$4+COUNTIF({years},$Z$3)-1)"
+    ws["Z6"] = f"=MATCH({metric},{metric_list},0)"
+    ws[f"{YEAR_OPTIONS_COL}1"] = "Year Options"
+    ws[f"{YEAR_OPTIONS_COL}2"] = ALL_YEARS
+    for j, y in enumerate(TABLE_YEARS):
+        ws[f"{YEAR_OPTIONS_COL}{3 + j}"] = f'=IF({y}<=$Y$2,{y},"")'
