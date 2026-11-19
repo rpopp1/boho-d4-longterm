@@ -11,7 +11,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from dashboard_metrics import (
     ALL_YEARS, CALC_SHEET, CURRENCY_FMT, FIRST_YEAR, LATEST_YEAR, MATRIX_RANGE, METRIC_CELL,
-    METRICS, MONTH_CELL, PADDED_LAST_ROW, SERIES, TABLE_YEARS, YEAR_CELL, YEAR_OPTIONS_COL,
+    METRICS, MONTH_CELL, PADDED_LAST_ROW, SERIES, TABLE_YEARS, YEAR_CELL, YEAR_OPTIONS_NAME,
     matrix_lookup, matrix_row, pm,
 )
 from dashboard_style import (
@@ -50,7 +50,7 @@ def _heat_fmt(fmt: str) -> str:
 
 
 def _controls(ws, row: int) -> None:
-    year_list = f"{CALC_SHEET}!${YEAR_OPTIONS_COL}$2:${YEAR_OPTIONS_COL}$14"
+    year_list = YEAR_OPTIONS_NAME
     specs = [
         ("A", MONTH_CELL, "Month", "Portfolio", '"' + ",".join(SERIES) + '"'),
         ("C", YEAR_CELL, "Year", ALL_YEARS, year_list),
@@ -106,10 +106,13 @@ def _year_table(ws, row: int) -> int:
     last = first + len(TABLE_YEARS) - 1
     body = f"B{first}:J{last}"
 
-    ws.conditional_formatting.add(body, ColorScaleRule(
-        start_type="min", start_color=HEAT_NEG,
-        mid_type="formula", mid_value=MIDPOINT, mid_color=HEAT_MID,
-        end_type="max", end_color=HEAT_POS))
+    # Months share one scale; Portfolio (about 8x a month for PnL) gets its own
+    # so it doesn't wash the month cells out.
+    for rng in (f"B{first}:I{last}", f"J{first}:J{last}"):
+        ws.conditional_formatting.add(rng, ColorScaleRule(
+            start_type="min", start_color=HEAT_NEG,
+            mid_type="formula", mid_value=MIDPOINT, mid_color=HEAT_MID,
+            end_type="max", end_color=HEAT_POS))
     # Number format follows the Metric dropdown.
     for i, (_key, label, fmt) in enumerate(METRICS):
         dxf = DifferentialStyle(numFmt=NumberFormat(numFmtId=170 + i, formatCode=_heat_fmt(fmt)))
@@ -182,7 +185,7 @@ def build_review_section(ws, calc_ws) -> dict:
     _tiles(ws, a["tiles"])
     year_last = _year_table(ws, a["year_table"])
     first = a["year_table"] + 2
-    _midpoint(calc_ws, f"$B${first}:$J${year_last}")
+    _midpoint(calc_ws, f"$B${first}:$I${year_last}")
     _detail_table(ws, a["detail"])
     end = _tier_table(ws, a["tiers"])
     ws.print_area = f"A{REVIEW_FIRST_ROW}:J{year_last}"

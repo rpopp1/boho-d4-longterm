@@ -26,7 +26,7 @@ def _dv_formula(ws, cell):
 def test_controls_have_dropdowns_and_defaults(dash):
     assert (dash["B18"].value, dash["D18"].value, dash["F18"].value) == ("Portfolio", "All years", "Total PnL")
     assert _dv_formula(dash, "B18") == '"Portfolio,January,March,May,July,August,September,October,December"'
-    assert _dv_formula(dash, "D18") == f"{CALC_SHEET}!$EZ$2:$EZ$14"
+    assert _dv_formula(dash, "D18") == "YearOptions"
     assert _dv_formula(dash, "F18").startswith('"Total PnL,Sharpe,Sortino,')
 
 
@@ -105,3 +105,12 @@ def test_chart_axes_are_readable(dash):
     assert bars.y_axis.number_format.formatCode == '[>=1000]#,##0;[<=-1000]-#,##0;0.00'
     dd = next(ch for ch in charts if any("Chart_SelDD" in s.val.numRef.f for s in ch.series))
     assert dd.x_axis.delete is True
+
+
+def test_portfolio_column_has_its_own_color_scale(dash):
+    first = REVIEW_ANCHORS["year_table"] + 2
+    last = first + 11
+    scales = {str(cf.sqref) for cf in dash.conditional_formatting for r in cf.rules if r.type == "colorScale"}
+    assert f"B{first}:I{last}" in scales and f"J{first}:J{last}" in scales
+    calc = dash.parent[CALC_SHEET]
+    assert f"MEDIAN(Dashboard!$B${first}:$I${last})" in calc["Z7"].value

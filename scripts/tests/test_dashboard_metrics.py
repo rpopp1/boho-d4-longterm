@@ -114,7 +114,8 @@ def test_year_options_follow_latest_year(calc):
 def test_control_cells(calc):
     assert calc["Z1"].value == "=MATCH(Dashboard!$B$18," + \
         '{"Portfolio","January","March","May","July","August","September","October","December"},0)'
-    assert calc["Z2"].value == '=IF(Dashboard!$D$18="All years",1,Dashboard!$D$18-2021+2)'
+    assert calc["Z2"].value == ('=IF(AND(ISNUMBER(Dashboard!$D$18),Dashboard!$D$18>=2021,'
+                                'Dashboard!$D$18<=$Y$2),Dashboard!$D$18-2021+2,1)')
     assert calc["Z3"].value == "=IF($Z$2=1,0,Dashboard!$D$18)"
     assert calc["Z4"].value == "=IF($Z$3=0,1,MATCH($Z$3,$A$2:$A$3001,0))"
     assert calc["Z5"].value == "=IF($Z$3=0,$Y$1,$Z$4+COUNTIF($A$2:$A$3001,$Z$3)-1)"
@@ -124,3 +125,9 @@ def test_control_cells(calc):
 def test_matrix_lookup_text():
     assert matrix_lookup("$Z$6", "$Z$1", "$Z$2") == \
         "INDEX(Dashboard_Calc!$FB$1:$FN$110,(($Z$6)-1)*11+1+($Z$1),$Z$2)"
+
+
+def test_year_options_name_stops_at_the_latest_year(calc):
+    # A workbook-level name so the Dashboard's Year dropdown has no blank rows.
+    dn = calc.parent.defined_names["YearOptions"]
+    assert dn.attr_text == "Dashboard_Calc!$EZ$2:INDEX(Dashboard_Calc!$EZ$2:$EZ$14,Dashboard_Calc!$Y$2-2021+2)"

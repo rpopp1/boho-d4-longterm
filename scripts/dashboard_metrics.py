@@ -3,6 +3,7 @@ and per calendar year, per contract month and for the Portfolio), plus the
 Dashboard_Calc layout constants they depend on."""
 
 from openpyxl.utils import get_column_letter
+from openpyxl.workbook.defined_name import DefinedName
 
 from config_map import CONFIG_MONTH_COLUMNS
 from multi_month import MONTHS
@@ -324,6 +325,7 @@ YEAR_CELL = "D18"
 METRIC_CELL = "F18"
 ALL_YEARS = "All years"
 YEAR_OPTIONS_COL = "EZ"
+YEAR_OPTIONS_NAME = "YearOptions"
 
 
 def _abs(cell: str) -> str:
@@ -380,7 +382,9 @@ def build_controls(ws) -> None:
     month, year, metric = (f"Dashboard!{_abs(c)}" for c in (MONTH_CELL, YEAR_CELL, METRIC_CELL))
     years = f"$A$2:$A${PADDED_LAST_ROW}"
     ws["Z1"] = f"=MATCH({month},{series_list},0)"
-    ws["Z2"] = f'=IF({year}="{ALL_YEARS}",1,{year}-{FIRST_YEAR}+2)'
+    # Anything but a year with data (All years, a blank, a cleared cell) = All years.
+    ws["Z2"] = (f"=IF(AND(ISNUMBER({year}),{year}>={FIRST_YEAR},{year}<=$Y$2),"
+                f"{year}-{FIRST_YEAR}+2,1)")
     ws["Z3"] = f"=IF($Z$2=1,0,{year})"
     ws["Z4"] = f"=IF($Z$3=0,1,MATCH($Z$3,{years},0))"
     ws["Z5"] = f"=IF($Z$3=0,$Y$1,$Z$4+COUNTIF({years},$Z$3)-1)"
@@ -389,3 +393,7 @@ def build_controls(ws) -> None:
     ws[f"{YEAR_OPTIONS_COL}2"] = ALL_YEARS
     for j, y in enumerate(TABLE_YEARS):
         ws[f"{YEAR_OPTIONS_COL}{3 + j}"] = f'=IF({y}<=$Y$2,{y},"")'
+    # Workbook-level name the Year dropdown lists: All years + years with data.
+    col = YEAR_OPTIONS_COL
+    ws.parent.defined_names[YEAR_OPTIONS_NAME] = DefinedName(YEAR_OPTIONS_NAME, attr_text=(
+        f"{CALC_SHEET}!${col}$2:INDEX({CALC_SHEET}!${col}$2:${col}$14,{CALC_SHEET}!$Y$2-{FIRST_YEAR}+2)"))
