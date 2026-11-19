@@ -23,8 +23,13 @@ Cumulative PnL", BV "Risk Adjusted Cumulative $ PnL", BY "RA_Max Drawdown" --
 never the gross per-leg columns (AV:BJ), because the RA basis is what
 actually would have happened once the stop-loss overlay is applied. Gross
 per-leg PnL is shown only as a secondary attribution sub-table.
+
+Usage (the workbook is named on the command line, so renaming it never
+needs a code change; a timestamped backup is written next to it first):
+    python scripts/build_dashboard.py "<Knox workbook>.xlsx"
 """
 
+import argparse
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -40,8 +45,6 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from config_map import CONFIG_MONTH_COLUMNS
 from multi_month import MONTHS
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-TARGET_FILE = REPO_ROOT / "Knox_Multimonth_BOHO_D4_Strategy - Copy.xlsx"
 
 # Full template-padded row extent every Position Model tab shares (real data
 # currently ends around row 1392/1393 depending on month; everything past
@@ -969,26 +972,28 @@ def build_selected_series_chart(ws, wb, anchor: str) -> None:
     ws.add_chart(chart, anchor)
 
 
-def main():
-    if not TARGET_FILE.exists():
-        raise FileNotFoundError(TARGET_FILE)
+def main(target_file: Path) -> None:
+    if not target_file.is_file():
+        raise SystemExit(f"Workbook not found: {target_file}")
+    if target_file.suffix.lower() != ".xlsx":
+        raise SystemExit(f"Expected an .xlsx workbook, got: {target_file.name}")
 
     global COMMON_REAL_LAST_ROW
-    COMMON_REAL_LAST_ROW = compute_common_real_last_row(TARGET_FILE)
+    COMMON_REAL_LAST_ROW = compute_common_real_last_row(target_file)
     print(f"COMMON_REAL_LAST_ROW computed dynamically: {COMMON_REAL_LAST_ROW}")
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = TARGET_FILE.with_name(
-        TARGET_FILE.stem + f" - backup before dashboard build {timestamp}.xlsx"
+    backup_path = target_file.with_name(
+        target_file.stem + f" - backup before dashboard build {timestamp}.xlsx"
     )
-    shutil.copy2(TARGET_FILE, backup_path)
+    shutil.copy2(target_file, backup_path)
     print(f"Backup written: {backup_path}")
 
-    wb = openpyxl.load_workbook(TARGET_FILE)
+    wb = openpyxl.load_workbook(target_file)
     build_calc_sheet(wb)
     build_dashboard_sheet(wb)
-    wb.save(TARGET_FILE)
-    print(f"Dashboard written to: {TARGET_FILE}")
+    wb.save(target_file)
+    print(f"Dashboard written to: {target_file}")
 
     # This project's working directory is OneDrive-synced; opening a
     # just-written large file in a brand-new Excel process immediately after
@@ -1000,7 +1005,7 @@ def main():
     import time
     time.sleep(10)
 
-    refresh_via_excel_com(TARGET_FILE)
+    refresh_via_excel_com(target_file)
     print("Excel-COM refresh + validation complete.")
 
 
@@ -1142,4 +1147,6 @@ def refresh_via_excel_com(path: Path) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Build the Dashboard tabs into a Knox multi-month workbook.")
+    parser.add_argument("workbook", type=Path, help="Path to the Knox workbook (.xlsx) to update")
+    main(parser.parse_args().workbook.resolve())
