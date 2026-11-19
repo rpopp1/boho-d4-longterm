@@ -40,24 +40,13 @@ def test_calc_sheet_is_prefilled_to_the_padded_last_row(built):
 
 
 def test_performance_stats_divide_by_rows_in_use_not_a_fixed_count(built):
-    dash = built["Dashboard"]
-    formulas = [c.value for row in dash.iter_rows() for c in row if isinstance(c.value, str)]
-    # Since-inception figures (the year-filtered tables divide by that year's day count).
-    sharpe = [f for f in formulas if "SQRT(252)" in f and f"{CALC_SHEET}!$A$2" not in f]
+    calc = built[CALC_SHEET]
+    # Since-inception figures live in the matrix's All column (FB); the
+    # year columns divide by that year's day count instead.
+    formulas = [calc.cell(r, 158).value for r in range(1, 111)]
+    sharpe = [f for f in formulas if isinstance(f, str) and "SQRT(252)" in f]
     assert sharpe and all(f"{CALC_SHEET}!$Y$1" in f for f in sharpe)
-    assert not any("AVERAGE(Dashboard_Calc" in f or "STDEV.P(" in f for f in formulas)
-
-
-def test_calendar_year_tables_reserve_rows_through_the_last_table_year(built):
-    dash = built["Dashboard"]
-    title = next(r for r in range(1, 200)
-                 if dash.cell(r, 1).value == "Calendar-Year PnL by Contract Month (Risk-Adjusted Basis)")
-    first = title + 2
-    for j, year in enumerate(TABLE_YEARS):
-        assert dash.cell(first + j, 1).value == f'=IF({year}<={CALC_SHEET}!$Y$2,{year},"")'
-        # Each cell follows its row's year cell and stays blank until it fills.
-        assert dash.cell(first + j, 2).value.startswith(f'=IF($A{first + j}="","",')
-        assert f"=$A{first + j})" in dash.cell(first + j, 2).value
+    assert not any("AVERAGE(Dashboard_Calc" in f or "STDEV.P(" in f for f in formulas if isinstance(f, str))
 
 
 def test_by_year_chart_years_slide_with_the_latest_year(built):

@@ -131,6 +131,9 @@ def build_today_section(ws, first_row: int = 4) -> int:
     total.number_format = CURRENCY_FMT
     for c in range(1, len(HEADERS) + 1):
         ws.cell(row=port, column=c).font = BOLD
+    # Next Signal text runs across J:M so the review tables below keep even columns.
+    for r in range(header, last + 1):
+        ws.merge_cells(start_row=r, start_column=10, end_row=r, end_column=13)
 
     ws.conditional_formatting.add(f"D{first}:D{last}", ColorScaleRule(
         start_type="num", start_value=-2.5, start_color=HEAT_NEG,

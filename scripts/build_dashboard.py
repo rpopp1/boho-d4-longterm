@@ -60,10 +60,12 @@ from dashboard_metrics import (  # noqa: F401  (re-exported for tests and caller
 from dashboard_metrics import (
     PORT_YEARDD_COL, PORT_YEARPEAK_COL, build_controls, build_metric_matrix,
 )
+from dashboard_review import build_review_section
 from dashboard_today import build_today_block, build_today_section
 from dashboard_style import (
     BOLD, CURRENCY_FMT, DIVERGING_MID, DIVERGING_NEG, DIVERGING_POS, HEADER_FILL, HEADER_FONT,
-    MONTH_COLORS, PCT_FMT, PORTFOLIO_COLOR, RATIO_FMT, SECTION_FONT, section_title, style_header_row,
+    MONTH_COLORS, PCT_FMT, PORTFOLIO_COLOR, RATIO_FMT, SECTION_FONT, TITLE_FONT, section_title,
+    style_header_row,
 )
 
 
@@ -72,69 +74,6 @@ from dashboard_style import (
 # every CHOOSE(...)-based helper formula below matches positionally: index 1
 # = Portfolio, indices 2-9 = the 8 months in the same order as MONTHS.
 SELECTOR_OPTIONS = ["Portfolio"] + MONTHS
-
-
-def build_year_month_table(
-    ws, start_row: int, title: str, cell_formula_fn, number_format: str,
-    color_scale: str | None = "diverging2", total_col: bool = False,
-) -> int:
-    """Generic Year (rows) x Month (cols) table, matching the layout of the
-    original Calendar-Year PnL heatmap. cell_formula_fn(month, year) returns
-    a full formula string (leading '='). color_scale: 'diverging2' (min/max),
-    'diverging3' (min/0/max), or None (no conditional formatting -- used for
-    Trade Count, where color doesn't imply good/bad). Returns the last row
-    used, so callers can stack the next section below it."""
-    header_row = start_row
-    section_title(ws, header_row, title)
-    col_row = header_row + 1
-    ws.cell(row=col_row, column=1, value="Year")
-    for i, month in enumerate(MONTHS):
-        ws.cell(row=col_row, column=2 + i, value=month)
-    last_col = 1 + len(MONTHS)
-    if total_col:
-        last_col += 1
-        ws.cell(row=col_row, column=last_col, value="Total")
-    style_header_row(ws, col_row, 1, last_col)
-
-    first_row = col_row + 1
-    for j, year in enumerate(TABLE_YEARS):
-        r = first_row + j
-        # The row shows its year (and its numbers) once the data reaches it.
-        ws.cell(row=r, column=1, value=f'=IF({year}<={LATEST_YEAR},{year},"")')
-        year_ref = f"$A{r}"
-        for i, month in enumerate(MONTHS):
-            col = 2 + i
-            body = cell_formula_fn(month, year_ref).removeprefix("=")
-            ws.cell(row=r, column=col, value=f'=IF({year_ref}="","",{body})')
-            ws.cell(row=r, column=col).number_format = number_format
-        if total_col:
-            first_month_col = get_column_letter(2)
-            last_month_col = get_column_letter(1 + len(MONTHS))
-            tc = 2 + len(MONTHS)
-            ws.cell(row=r, column=tc,
-                    value=f'=IF({year_ref}="","",SUM({first_month_col}{r}:{last_month_col}{r}))')
-            ws.cell(row=r, column=tc).number_format = number_format
-            ws.cell(row=r, column=tc).font = BOLD
-
-    last_row = first_row + len(TABLE_YEARS) - 1
-    if color_scale == "diverging3":
-        ws.conditional_formatting.add(
-            f"B{first_row}:{get_column_letter(1 + len(MONTHS))}{last_row}",
-            ColorScaleRule(
-                start_type="min", start_color=DIVERGING_NEG,
-                mid_type="num", mid_value=0, mid_color=DIVERGING_MID,
-                end_type="max", end_color=DIVERGING_POS,
-            ),
-        )
-    elif color_scale == "diverging2":
-        ws.conditional_formatting.add(
-            f"B{first_row}:{get_column_letter(1 + len(MONTHS))}{last_row}",
-            ColorScaleRule(
-                start_type="min", start_color=DIVERGING_NEG,
-                end_type="max", end_color=DIVERGING_POS,
-            ),
-        )
-    return last_row
 
 
 # ---------------------------------------------------------------------------
@@ -399,12 +338,14 @@ def _plot_categories(chart) -> None:
 # Dashboard: the human-facing tab.
 # ---------------------------------------------------------------------------
 def build_dashboard_sheet(wb):
+    """Title, the Today section (rows 4-14) and the Performance Review
+    section (row 17 down)."""
     if "Dashboard" in wb.sheetnames:
         del wb["Dashboard"]
     ws = wb.create_sheet("Dashboard", 0)
 
-    ws["A1"] = "BOHO / D4 Multi-Month Strategy — Dashboard"
-    ws["A1"].font = Font(bold=True, size=16)
+    ws["A1"] = "BOHO / D4 Multi-Month Strategy"
+    ws["A1"].font = TITLE_FONT
     ws["A2"] = "Data through:"
     ws["A2"].font = BOLD
     last_date_terms = ",".join(
@@ -413,146 +354,17 @@ def build_dashboard_sheet(wb):
     )
     ws["B2"] = f"=MAX({last_date_terms})"
     ws["B2"].number_format = "MM/DD/YYYY"
+    ws["B2"].alignment = Alignment(horizontal="left")
 
-    # "Filter Charts By" selector: drives the two charts marked "Selected
-    # Series" below (the cumulative-PnL drill-down and the PnL-by-year
-    # overlay) via Dashboard_Calc's CHOOSE-based helper columns. Placed
-    # directly above the chart column so its effect is visually obvious;
-    # defaults to Portfolio so both charts' out-of-the-box view is unchanged
-    # from before this control existed.
-    ws["N2"] = "Filter Charts By:"
-    ws["N2"].font = BOLD
-    ws["O2"] = "Portfolio"
-    selector_dv = DataValidation(
-        type="list",
-        formula1='"' + ",".join(SELECTOR_OPTIONS) + '"',
-        allow_blank=False,
-    )
-    ws.add_data_validation(selector_dv)
-    selector_dv.add(ws["O2"])
+    build_today_section(ws, first_row=4)
+    anchors = build_review_section(ws, wb[CALC_SHEET])
 
-    # ---------------- Today ----------------
-    last_cockpit_row = build_today_section(ws, first_row=4)
-
-    # ---------------- Performance summary ----------------
-    perf_header_row = last_cockpit_row + 2
-    section_title(ws, perf_header_row, "Performance Since Inception (Risk-Adjusted Basis)")
-    perf_col_row = perf_header_row + 1
-    perf_headers = [
-        "Month", "RA Total PnL", "Sharpe", "Sortino", "Calmar", "Max Drawdown",
-        "Win Rate", "Avg $ Win", "Avg $ Loss", "Profit Factor", "Trade Count",
-    ]
-    for i, h in enumerate(perf_headers, start=1):
-        ws.cell(row=perf_col_row, column=i, value=h)
-    style_header_row(ws, perf_col_row, 1, len(perf_headers))
-
-    perf_first_row = perf_col_row + 1
-    fmts = [CURRENCY_FMT, RATIO_FMT, RATIO_FMT, RATIO_FMT, CURRENCY_FMT,
-            PCT_FMT, CURRENCY_FMT, CURRENCY_FMT, RATIO_FMT, None]
-    for i, month in enumerate(MONTHS):
-        r = perf_first_row + i
-        ws.cell(row=r, column=1, value=month)
-        for j, key in enumerate(METRIC_KEYS):
-            cell = ws.cell(row=r, column=2 + j, value=month_inception_formula(key, month))
-            if fmts[j]:
-                cell.number_format = fmts[j]
-
-    portfolio_row = perf_first_row + len(MONTHS)
-    ws.cell(row=portfolio_row, column=1, value="Portfolio (Sum of 8 Months)").font = BOLD
-    for j, key in enumerate(METRIC_KEYS[:5]):
-        cell = ws.cell(row=portfolio_row, column=2 + j, value=portfolio_inception_formula(key))
-        cell.number_format = fmts[j]
-    for col in (7, 8, 9, 10, 11):
-        ws.cell(row=portfolio_row, column=col, value="n/a")
-        ws.cell(row=portfolio_row, column=col).alignment = Alignment(horizontal="center")
-
-    # ---------------- Gross-by-leg attribution (secondary) ----------------
-    attr_header_row = portfolio_row + 2
-    section_title(ws, attr_header_row, "Gross PnL Attribution by Position Tier (secondary detail, not stop-loss-adjusted)")
-    attr_col_row = attr_header_row + 1
-    attr_headers = ["Month", "Tier 1 PnL", "Tier 2 PnL", "Tier 3 PnL", "Gross Total PnL"]
-    for i, h in enumerate(attr_headers, start=1):
-        ws.cell(row=attr_col_row, column=i, value=h)
-    style_header_row(ws, attr_col_row, 1, len(attr_headers))
-
-    attr_first_row = attr_col_row + 1
-    for i, month in enumerate(MONTHS):
-        r = attr_first_row + i
-        ws.cell(row=r, column=1, value=month)
-        for col, letter in ((2, "AZ"), (3, "BE"), (4, "BJ")):
-            rng = f"{pm(month)}!${letter}$2:${letter}${PADDED_LAST_ROW}"
-            ws.cell(row=r, column=col, value=f"=LOOKUP(2,1/ISNUMBER({rng}),{rng})")
-            ws.cell(row=r, column=col).number_format = CURRENCY_FMT
-        ws.cell(row=r, column=5, value=f"=B{r}+C{r}+D{r}")
-        ws.cell(row=r, column=5).number_format = CURRENCY_FMT
-
-    attr_last_row = attr_first_row + len(MONTHS) - 1
-
-    # ---------------- Year x Month per-metric tables ----------------
-    # PnL is rebuilt here to sum straight from Dashboard_Calc's cleaned daily
-    # columns rather than each Position Model tab's live 'CD' column: CD has
-    # a real pre-existing bug (its year-reset branch discards that year's
-    # first trading day of PnL entirely) that silently made this heatmap's
-    # yearly totals not tie to the Performance table's since-inception RA
-    # Total PnL -- found while investigating exactly that mismatch. Every
-    # other table here is new, per-request: Sharpe/Sortino/Calmar/Max
-    # Drawdown/Win Rate/Avg Win/Avg Loss/Profit Factor/Trade Count, each
-    # broken out by year AND contract month. A "Total" column is included
-    # only for PnL and Trade Count -- the only two metrics here that are
-    # meaningfully additive across months; summing a Sharpe ratio, win rate,
-    # or profit factor across months would be meaningless.
-    heat_last_row = build_year_month_table(
-        ws, attr_last_row + 2, "Calendar-Year PnL by Contract Month (Risk-Adjusted Basis)",
-        _year_month_pnl_formula, CURRENCY_FMT, color_scale="diverging3", total_col=True,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Sharpe by Contract Month (Risk-Adjusted Basis)",
-        _year_month_sharpe_formula, RATIO_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Sortino by Contract Month (Risk-Adjusted Basis)",
-        _year_month_sortino_formula, RATIO_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Calmar by Contract Month (Risk-Adjusted Basis)",
-        _year_month_calmar_formula, RATIO_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Max Drawdown by Contract Month (Risk-Adjusted Basis)",
-        _year_month_maxdd_formula, CURRENCY_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Win Rate by Contract Month (Risk-Adjusted Basis)",
-        _year_month_winrate_formula, PCT_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Avg $ Win by Contract Month (Risk-Adjusted Basis)",
-        _year_month_avgwin_formula, CURRENCY_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Avg $ Loss by Contract Month (Risk-Adjusted Basis)",
-        _year_month_avgloss_formula, CURRENCY_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Profit Factor by Contract Month (Risk-Adjusted Basis)",
-        _year_month_profitfactor_formula, RATIO_FMT,
-    )
-    heat_last_row = build_year_month_table(
-        ws, heat_last_row + 2, "Calendar-Year Trade Count by Contract Month",
-        _year_month_tradecount_formula, "0", color_scale=None, total_col=True,
-    )
-
-    # ---------------- Charts ----------------
-    build_cumulative_pnl_chart(ws, wb, anchor="N4")
-    build_ranking_chart(ws, anchor="N25", perf_first_row=perf_first_row)
-    build_pnl_by_year_chart(ws, wb, anchor="N45")
-    build_selected_series_chart(ws, wb, anchor="N66")
-
-    for col_letter, width in [("A", 24), ("B", 14), ("C", 14), ("D", 14), ("E", 16),
-                               ("F", 12), ("G", 14), ("H", 14), ("I", 14), ("J", 14), ("K", 12),
-                               ("N", 18), ("O", 14)]:
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A3"
+    widths = {"A": 22, **{c: 15 for c in "BCDEFGHIJKLM"}}
+    for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
-
+    ws.anchors = anchors  # for the chart builder
     return ws
 
 
