@@ -60,6 +60,7 @@ from dashboard_metrics import (  # noqa: F401  (re-exported for tests and caller
 from dashboard_metrics import (
     PORT_YEARDD_COL, PORT_YEARPEAK_COL, build_controls, build_metric_matrix,
 )
+from dashboard_today import build_today_block, build_today_section
 from dashboard_style import (
     BOLD, CURRENCY_FMT, DIVERGING_MID, DIVERGING_NEG, DIVERGING_POS, HEADER_FILL, HEADER_FONT,
     MONTH_COLORS, PCT_FMT, PORTFOLIO_COLOR, RATIO_FMT, SECTION_FONT, section_title, style_header_row,
@@ -333,6 +334,7 @@ def build_calc_sheet(wb):
         )
 
     build_metric_matrix(ws)
+    build_today_block(ws)
 
     # Sheet-scoped names the date-axis charts plot, each ending at the last
     # row in use, so the charts grow as rows are pasted.
@@ -429,97 +431,8 @@ def build_dashboard_sheet(wb):
     ws.add_data_validation(selector_dv)
     selector_dv.add(ws["O2"])
 
-    # ---------------- Cockpit ----------------
-    cockpit_header_row = 4
-    section_title(ws, cockpit_header_row, "Current Snapshot")
-    header_row = cockpit_header_row + 1
-    headers = ["Month", "As Of", "Total Position", "Z-Score", "Dist. to Threshold", "Regime"]
-    for i, h in enumerate(headers, start=1):
-        ws.cell(row=header_row, column=i, value=h)
-    style_header_row(ws, header_row, 1, len(headers))
-
-    first_data_row = header_row + 1
-    for i, month in enumerate(MONTHS):
-        r = first_data_row + i
-        rng = f"{pm(month)}!$A$2:$A${PADDED_LAST_ROW}"
-        ws.cell(row=r, column=1, value=month)
-        # Plain ISNUMBER isn't enough here: several months' unused template
-        # padding beyond real data evaluates to literal 0 (not blank), which
-        # passes ISNUMBER and would be picked up as the "last" date. A real
-        # trading date is always well past this literal epoch-zero, so
-        # requiring range>DATE(2015,1,1) excludes the 0-padding while still
-        # correctly skipping genuine error cells (LOOKUP's own error-tolerant
-        # scan, the same mechanism the ISNUMBER-based idiom relies on).
-        ws.cell(row=r, column=2, value=f'=LOOKUP(2,1/({rng}>DATE(2015,1,1)),{rng})')
-        ws.cell(row=r, column=2).number_format = "MM/DD/YYYY"
-
-        v_rng = f"{pm(month)}!$V$2:$V${PADDED_LAST_ROW}"
-        ws.cell(row=r, column=3, value=f"=LOOKUP(2,1/ISNUMBER({v_rng}),{v_rng})")
-
-        l_rng = f"{pm(month)}!$L$2:$L${PADDED_LAST_ROW}"
-        z_formula = f"LOOKUP(2,1/ISNUMBER({l_rng}),{l_rng})"
-        ws.cell(row=r, column=4, value=f"={z_formula}")
-        ws.cell(row=r, column=4).number_format = RATIO_FMT
-
-        t1 = config_tier_cell(month, 14)
-        t2 = config_tier_cell(month, 15)
-        t3 = config_tier_cell(month, 16)
-        z_cell = f"$D{r}"
-        ws.cell(
-            row=r,
-            column=5,
-            value=(
-                f"=MIN(ABS({z_cell}-{t1}),ABS({z_cell}-{t2}),ABS({z_cell}-{t3}),"
-                f"ABS({z_cell}+{t1}),ABS({z_cell}+{t2}),ABS({z_cell}+{t3}))"
-            ),
-        )
-        ws.cell(row=r, column=5).number_format = RATIO_FMT
-
-        dc_rng = f"{pm(month)}!$DC$2:$DC${PADDED_LAST_ROW}"
-        ws.cell(row=r, column=6, value=f'=LOOKUP(2,1/({dc_rng}<>""),{dc_rng})')
-
-    last_cockpit_row = first_data_row + len(MONTHS) - 1
-
-    ws.conditional_formatting.add(
-        f"D{first_data_row}:D{last_cockpit_row}",
-        ColorScaleRule(
-            start_type="min", start_color=DIVERGING_NEG,
-            mid_type="num", mid_value=0, mid_color=DIVERGING_MID,
-            end_type="max", end_color=DIVERGING_POS,
-        ),
-    )
-    ws.conditional_formatting.add(
-        f"C{first_data_row}:C{last_cockpit_row}",
-        DataBarRule(start_type="min", end_type="max", color=DIVERGING_POS),
-    )
-    # Dist. to Threshold: small = close to a regime shift (danger), large =
-    # comfortably inside the current regime (safe). Reuses the same
-    # diverging pair as Z-score/PnL rather than a fresh red/green scale, for
-    # one consistent color language across the tab and to avoid a
-    # red/green combination that isn't colorblind-safe.
-    ws.conditional_formatting.add(
-        f"E{first_data_row}:E{last_cockpit_row}",
-        ColorScaleRule(
-            start_type="min", start_color=DIVERGING_NEG,
-            end_type="max", end_color=DIVERGING_POS,
-        ),
-    )
-    # Regime: categorical, so a color scale doesn't apply -- flag "Extreme"
-    # solid vermillion (matches the "danger" end of every other polarity
-    # encoding on this tab) and "High" a lighter tint of the same hue;
-    # "Normal" is left unstyled since it's the expected/calm state.
-    regime_range = f"F{first_data_row}:F{last_cockpit_row}"
-    ws.conditional_formatting.add(
-        regime_range,
-        CellIsRule(operator="equal", formula=['"Extreme"'],
-                   fill=PatternFill("solid", fgColor=DIVERGING_NEG),
-                   font=Font(color="FFFFFF", bold=True)),
-    )
-    ws.conditional_formatting.add(
-        regime_range,
-        CellIsRule(operator="equal", formula=['"High"'],
-                   fill=PatternFill("solid", fgColor="F4C7A8")),
-    )
+    # ---------------- Today ----------------
+    last_cockpit_row = build_today_section(ws, first_row=4)
 
     # ---------------- Performance summary ----------------
     perf_header_row = last_cockpit_row + 2
