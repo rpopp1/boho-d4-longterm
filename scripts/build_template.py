@@ -7,12 +7,13 @@ from build_matrices_johansen import write_matrices_johansen_results_sheet, COMBI
 from build_johansen_monthly import write_johansen_monthly_sheet
 from build_monthly_beta import write_monthly_beta_sheet
 from build_position_model import write_position_model_sheet
-from multi_month import MONTHS
+from multi_month import MONTHS, ROLL_PRICES_SHEET
+from roll_fix import write_roll_prices_sheet
 
 SHEET_ORDER = [
     "Notes", "Config", "Data", "DiffLag", COMBINED_SHEET_NAME,
     "Johansen_Monthly", "Monthly Beta",
-] + [f"Position Model - {m}" for m in MONTHS]
+] + [f"Position Model - {m}" for m in MONTHS] + [ROLL_PRICES_SHEET]
 
 
 def build_template(source_path: str, output_path: str, num_rows: int = 3000) -> None:
@@ -32,6 +33,7 @@ def build_template(source_path: str, output_path: str, num_rows: int = 3000) -> 
         write_monthly_beta_sheet(wb, source_path, month, num_rows=num_rows)
     for month in MONTHS:
         write_position_model_sheet(wb, source_path, month, num_rows=num_rows)
+    write_roll_prices_sheet(wb)
     wb.remove(default_sheet)
     wb._sheets.sort(key=lambda ws: SHEET_ORDER.index(ws.title))
     wb.save(output_path)

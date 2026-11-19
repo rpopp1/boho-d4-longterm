@@ -6,6 +6,7 @@ from openpyxl.utils import column_index_from_string
 from sheet_cloner import fill_sheet_from_pattern
 from config_map import CONFIG_FIELDS, config_cell, constant_map_for_month
 from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP
+from roll_fix import price_change_formulas
 from formula_tools import (
     extract_row_formulas,
     rewrite_constants,
@@ -354,6 +355,18 @@ def write_position_model_sheet(wb, source_path: str, month: str, num_rows: int =
         ws, last_target_row, max_col,
         sheet_map={"Data": (data_offset, "Data"), "Johansen_Monthly": (jm_offset, "Johansen_Monthly")},
     )
+    _write_roll_aware_price_changes(ws, month, last_target_row)
+
+
+def _write_roll_aware_price_changes(ws, month: str, last_target_row: int) -> None:
+    """Replace the plain day-over-day price changes in Z:AF with roll-aware
+    ones (see roll_fix.py), so a contract roll day is priced entirely in the
+    old contract. Written after the cross-sheet relocation: these formulas
+    reference only this sheet's own price columns and 'Roll Prices', whose
+    per-month blocks are already addressed absolutely."""
+    for row in range(3, last_target_row + 1):
+        for col, formula in price_change_formulas(month, row, file_syntax=True).items():
+            ws[f"{col}{row}"] = formula
 
 
 def _write_generalized_trailing_window_accum_cols(ws, last_target_row: int, max_col: int) -> None:

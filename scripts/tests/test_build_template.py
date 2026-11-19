@@ -13,7 +13,7 @@ def test_build_template_creates_expected_sheets_in_order():
         assert wb.sheetnames == [
             "Notes", "Config", "Data", "DiffLag", "Matrices_Johansen_Results",
             "Johansen_Monthly", "Monthly Beta",
-        ] + [f"Position Model - {m}" for m in MONTHS]
+        ] + [f"Position Model - {m}" for m in MONTHS] + ["Roll Prices"]
 
 
 def test_build_template_data_sheet_has_no_price_values_for_every_month():
