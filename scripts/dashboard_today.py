@@ -63,6 +63,12 @@ def position_formula(refs: dict) -> str:
     return f'=IF({pos}=0,"Flat",IF({active}=1,IF({pos}>0,"Long","Short"),"Flat (exited)"))'
 
 
+def open_pnl_formula(refs: dict) -> str:
+    """Current trade PnL while a position is held. The overlay still flags a
+    trade active on the day it closes (signal back to 0), so gate on both."""
+    return f'=IF(AND({refs["active"]}=1,{refs["pos"]}<>0),{refs["trade_pnl"]},"")'
+
+
 def next_signal_formula(refs: dict) -> str:
     g = refs
     t = lambda x: f'TEXT({x},"0.00")'  # noqa: E731
@@ -109,7 +115,7 @@ def build_today_section(ws, first_row: int = 4) -> int:
             (f"={g['pctl']}", "0%"),
             (f"={g['vol']}", "0.00"),
             (f'=IF({g["shock"]}=1,"⚡ shock","")', None),
-            (f'=IF({g["active"]}=1,{g["trade_pnl"]},"")', CURRENCY_FMT),
+            (open_pnl_formula(g), CURRENCY_FMT),
             (next_signal_formula(g), None),
         ]
         for c, (v, fmt) in enumerate(values, start=1):

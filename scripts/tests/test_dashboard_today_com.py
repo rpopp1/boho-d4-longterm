@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-from dashboard_today import TODAY_FIELDS, next_signal_formula, position_formula
+from dashboard_today import TODAY_FIELDS, next_signal_formula, open_pnl_formula, position_formula
 
 pytest.importorskip("win32com.client")
 from excel_com import isolated_workbook  # noqa: E402
@@ -29,6 +29,8 @@ CASES = {
     "pt_no_reentry": dict(pos=-1, active=0, z=1.52, pt_exit=1, exit_z=1.52, reentry=0,
                           s1=-0.25, s2=-0.5, s3=-0.25),
     "stopped_short": dict(pos=-1, active=0, z=0.74, s1=-0.25, s2=-0.5, s3=-0.25),
+    "closed_today": dict(pos=0, active=1, z=-0.18, trade_pnl=50875),
+    "open_long": dict(pos=1, active=1, z=-0.74, trade_pnl=16355, l1=0.25, l2=0.5, l3=0.25),
 }
 
 
@@ -46,6 +48,7 @@ def results():
             ws.cell(row=r, column=1 + j, value=vals[k])
         ws[f"AY{r}"] = position_formula(refs)
         ws[f"AZ{r}"] = next_signal_formula(refs)
+        ws[f"BA{r}"] = open_pnl_formula(refs)
     path = pathlib.Path(tempfile.mkdtemp()) / "today_cases.xlsx"
     wb.save(path)
     out = {}
@@ -53,17 +56,18 @@ def results():
         excel.CalculateFull()
         sh = xwb.Worksheets(1)
         for i, name in enumerate(names):
-            out[name] = (sh.Range(f"AY{i + 1}").Value, sh.Range(f"AZ{i + 1}").Value)
+            out[name] = (sh.Range(f"AY{i + 1}").Value, sh.Range(f"AZ{i + 1}").Value,
+                         sh.Range(f"BA{i + 1}").Value)
         xwb.Saved = True
     return out
 
 
 def test_flat_no_signal(results):
-    assert results["flat"] == ("Flat", "Short at Z ≥ 1.75 (now 0.74)")
+    assert results["flat"][:2] == ("Flat", "Short at Z ≥ 1.75 (now 0.74)")
 
 
 def test_short_in_trade(results):
-    assert results["short_full"] == ("Short", "Exit at Z ≤ 0.10 (now 1.52)")
+    assert results["short_full"][:2] == ("Short", "Exit at Z ≤ 0.10 (now 1.52)")
 
 
 def test_partial_short_names_next_add_tier(results):
@@ -71,14 +75,14 @@ def test_partial_short_names_next_add_tier(results):
 
 
 def test_long_on_a_threshold(results):
-    pos, text = results["long_on_tier"]
+    pos, text, _ = results["long_on_tier"]
     assert pos == "Long"
     assert text == "Exit at Z ≥ -0.10 (now -2.10) · adds at Z ≤ -2.25"
     assert "99" not in text
 
 
 def test_profit_take_exit_with_reentry(results):
-    assert results["pt_reentry"] == ("Flat (exited)",
+    assert results["pt_reentry"][:2] == ("Flat (exited)",
                                      "Flat, profit-take exit. Re-entry 12/1 if Z ≥ 1.52 (now 1.52)")
 
 
@@ -87,5 +91,12 @@ def test_profit_take_exit_without_reentry(results):
 
 
 def test_stopped_out_short(results):
-    assert results["stopped_short"] == ("Flat (exited)",
+    assert results["stopped_short"][:2] == ("Flat (exited)",
                                         "Flat, stopped out. Waiting for signal reset at Z ≤ 0.10 (now 0.74)")
+
+
+def test_open_pnl_blank_when_the_trade_closed_today(results):
+    # The overlay still flags the exit day active; no position is held any more.
+    assert results["closed_today"][0] == "Flat"
+    assert results["closed_today"][2] in ("", None)
+    assert results["open_long"][2] == 16355
