@@ -18,6 +18,27 @@ MJR_BLOCK_WIDTH = (
     MATRICES_BLOCK_WIDTH + MJR_SUB_GAP + JOHANSEN_BLOCK_WIDTH + MJR_SUB_GAP + RESULTS_BLOCK_WIDTH
 )
 
+# Futures month code of each block's contract (Config's ZL/HOContractMonth).
+CONTRACT_CODES = {"January": "F", "March": "H", "May": "K", "July": "N",
+                  "August": "Q", "September": "U", "October": "V", "December": "Z"}
+
+# 'Roll Prices' sheet, identical layout in the pricing workbook (formulas) and
+# the Knox workbook (pasted values): one block per month, one row per roll year,
+# holding the OLD contract's (and old D4 vintage's) prices on that roll day.
+ROLL_PRICES_SHEET = "Roll Prices"
+ROLL_PRICES_HEADERS = ["Year", "Roll Date", "Old Contract", "SBO Settle", "HO Settle", "D4", "SBO Open", "HO Open"]
+ROLL_PRICES_BLOCK_WIDTH = len(ROLL_PRICES_HEADERS)
+ROLL_PRICES_GAP = 1
+ROLL_PRICES_FIRST_ROW = 3
+ROLL_PRICES_YEARS = list(range(2021, 2036))
+ROLL_PRICES_LAST_ROW = ROLL_PRICES_FIRST_ROW + len(ROLL_PRICES_YEARS) - 1
+
+
+def roll_prices_col(month: str, header: str) -> str:
+    """Column letter of `header` in `month`'s Roll Prices block."""
+    offset = column_offset(month, ROLL_PRICES_BLOCK_WIDTH, ROLL_PRICES_GAP)
+    return get_column_letter(ROLL_PRICES_HEADERS.index(header) + 1 + offset)
+
 
 def month_index(month: str) -> int:
     return MONTHS.index(month)

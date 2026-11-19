@@ -132,7 +132,7 @@ for i, d in enumerate(idx):
 meta = [{"label": "tp_oos.py", "value": Path(__file__).read_text(), "type": "code", "lang": "python"},
         {"label": "exit_backtest.py", "value": Path(lib).read_text(), "type": "code", "lang": "python"},
         {"label": "Input", "value": Path(src).name},
-        {"label": "Excluded", "value": "December 2026-11-16 (annual Z26->Z27 roll day; PnL formula spans two contracts, see roll-handling defect)"}]
+        {"label": "Roll days", "value": "Priced in the old contract through the roll-day close (Roll Prices sheet, roll-fix branch); no dates excluded"}]
 for name, rows in [("tp_grid", grid), ("tp_picks", picks), ("tp_walkforward", wf), ("tp_curves", curves), ("tp_levels", level_rows)]:
     (outdir / f"{name}.json").write_text(json.dumps({"rows": rows, "meta": meta}, separators=(",", ":")))
 

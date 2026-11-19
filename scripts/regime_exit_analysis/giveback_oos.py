@@ -115,7 +115,7 @@ for d, a, b, c in zip(cur.index, cur.values, gb.values, tp.values):
 meta = [{"label": "giveback_oos.py", "value": Path(__file__).read_text(), "type": "code", "lang": "python"},
         {"label": "exit_backtest.py", "value": Path(lib).read_text(), "type": "code", "lang": "python"},
         {"label": "Input", "value": Path(src).name},
-        {"label": "Excluded", "value": "December 2026-11-16 (suspect HO settle 4.2585 -> 3.2674)"}]
+        {"label": "Roll days", "value": "Priced in the old contract through the roll-day close (Roll Prices sheet, roll-fix branch); no dates excluded"}]
 for name, rows in [("gb_grid", grid), ("gb_picks", picks), ("gb_walkforward", wf), ("gb_curves", curves)]:
     (outdir / f"{name}.json").write_text(json.dumps({"rows": rows, "meta": meta}, separators=(",", ":")))
 

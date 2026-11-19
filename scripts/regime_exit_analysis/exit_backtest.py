@@ -12,7 +12,7 @@ SRC = sys.argv[1]
 MONTHS = ["January", "March", "May", "July", "August", "September", "October", "December"]
 STOP_BASE = {"January": -70000, "March": -100000, "May": -100000, "July": -70000, "August": -80000,
              "September": -50000, "October": -80000, "December": -65000}  # Config row 27
-EXCLUDE = {"December": ["2026-11-16"]}
+EXCLUDE = {}  # roll days are priced correctly by the roll fix; nothing to drop
 COLS = {"Date": "A", "BL": "BL", "BN": "BN", "BT": "BT", "EWMA": "CY", "Regime": "DC", "ZScore": "L"}
 
 wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)

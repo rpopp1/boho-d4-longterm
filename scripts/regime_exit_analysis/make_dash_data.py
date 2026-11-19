@@ -10,7 +10,7 @@ src, outdir = Path(sys.argv[1]), Path(sys.argv[2])
 MONTHS = ["January", "March", "May", "July", "August", "September", "October", "December"]
 COLS = {"Date": "A", "Active": "BM", "NewTrade": "BN", "StopToday": "BP", "RA": "BT",
         "EWMA": "CY", "Shock": "DA", "Pctl": "DB", "Regime": "DC"}
-EXCLUDE = {"December": ["2026-11-16"]}  # Dec HO settle 4.2585 -> 3.2674 on 11/16: suspect print
+EXCLUDE = {}  # roll days are priced correctly by the roll fix; nothing to drop
 
 wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
 code = Path(__file__).read_text()
@@ -49,7 +49,7 @@ for m in MONTHS:
 
 meta = [{"label": "make_dash_data.py", "value": code, "type": "code", "lang": "python"},
         {"label": "Input", "value": src.name},
-        {"label": "Excluded", "value": "December 2026-11-16 (suspect HO settle 4.2585 -> 3.2674)"}]
+        {"label": "Roll days", "value": "Priced in the old contract through the roll-day close (Roll Prices sheet, roll-fix branch); no dates excluded"}]
 (outdir / "regime_daily.json").write_text(json.dumps({"rows": daily, "meta": meta}, separators=(",", ":")))
 (outdir / "regime_trades.json").write_text(json.dumps({"rows": trades, "meta": meta}, separators=(",", ":")))
 print(len(daily), "daily rows;", len(trades), "trades")

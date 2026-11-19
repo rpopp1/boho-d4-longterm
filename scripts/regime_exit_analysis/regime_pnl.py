@@ -27,7 +27,6 @@ def load(month):
             df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df[df["Regime"].isin(["Normal", "High", "Extreme"])].copy()
     df["Date"] = pd.to_datetime(df["Date"])
-    df = df[df["Date"] < "2026-11-16"]  # suspect HO settle on 11/16 (4.26 -> 3.27)
     df["RegimePrev"] = df["Regime"].shift(1)
     df["PctlPrev"] = df["Pctl"].shift(1)
     df["EWMAPrev"] = df["EWMA"].shift(1)
