@@ -34,6 +34,8 @@ CONFIG_FIELDS = [
     ("StopLossUSD_Base",          27, -65000),  # was Position Model!$DQ$10 ("Trade Level Stop Loss", before *DQ11 scalar)
     ("D4Multiplier",              28, 1.5),     # was Position Model!$DK$11 ("D4 Multiplier")
     ("RiskLevelInput",            29, 1),       # was Position Model!$DQ$11 ("Risk Level")
+    ("ProfitTakeUSD",             30, None),    # trade-level profit-take $ (blank = off); see profit_take.py
+    ("ReentryMonthStart",         31, 0),       # 1 = re-open a profit-take exit at month start; see profit_take.py
 ]
 
 CONFIG_MONTH_COLUMNS = {month: get_column_letter(2 + i) for i, month in enumerate(MONTHS)}

@@ -7,6 +7,7 @@ from sheet_cloner import fill_sheet_from_pattern
 from config_map import CONFIG_FIELDS, config_cell, constant_map_for_month
 from multi_month import column_offset, DATA_BLOCK_WIDTH, JOHANSEN_MONTHLY_BLOCK_WIDTH, GAP
 from roll_fix import price_change_formulas
+from profit_take import FIRST_ROW as OVERLAY_FIRST_ROW, HEADERS as OVERLAY_HEADERS, overlay_formulas
 from formula_tools import (
     extract_row_formulas,
     rewrite_constants,
@@ -356,6 +357,19 @@ def write_position_model_sheet(wb, source_path: str, month: str, num_rows: int =
         sheet_map={"Data": (data_offset, "Data"), "Johansen_Monthly": (jm_offset, "Johansen_Monthly")},
     )
     _write_roll_aware_price_changes(ws, month, last_target_row)
+    _write_profit_take_overlay(ws, month, last_target_row)
+
+
+def _write_profit_take_overlay(ws, month: str, last_target_row: int) -> None:
+    """Profit-take and month-start re-entry on top of the stop overlay (see
+    profit_take.py): rewrites BO/BP/BQ/BT/BU and adds helper columns EK:EO
+    from the overlay's first steady-state row. Off (identical to the plain
+    stop overlay) until this month's Config rows 30/31 are set."""
+    for col, header in OVERLAY_HEADERS.items():
+        ws[f"{col}1"] = header
+    for row in range(OVERLAY_FIRST_ROW, last_target_row + 1):
+        for col, formula in overlay_formulas(month, row).items():
+            ws[f"{col}{row}"] = formula
 
 
 def _write_roll_aware_price_changes(ws, month: str, last_target_row: int) -> None:

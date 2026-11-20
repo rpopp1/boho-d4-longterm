@@ -170,9 +170,11 @@ def test_additional_self_referencing_columns_caught_by_widened_validation_are_wr
     assert ws["CD21"].value == '=IF(CO21=CO20,IFERROR(CD20,0)+BT21,0)'
 
     assert ws["BM21"].value == '=IF(BN21=1,1,IF(IFERROR(BM20,0)=1,IF(BL21=0,0,1),0))'
-    assert ws["BO21"].value == '=IF(BM21=0,0,IF(BN21=1,BL21,IFERROR(BO20,0)+BL21))'
-    assert ws["BQ21"].value == '=IF(BN21=1,0,IF(IFERROR(BQ20,0)=1,1,BP21))'
-    assert ws["BU21"].value == '=IF(BS21=0,0,IF(BN21=1,BT21,IFERROR(BU20,0)+BT21))'
+    # BO/BQ/BU are rewritten by the profit-take overlay (profit_take.py); its
+    # versions keep the same IFERROR-wrapped self-reference.
+    assert ws["BO21"].value == '=IF(BM21=0,0,IF(OR(BN21=1,EO21=1),BL21,IFERROR(BO20,0)+BL21))'
+    assert ws["BQ21"].value == '=IF(BN21=1,0,IF(EO21=1,BP21,IF(IFERROR(BQ20,0)=1,1,BP21)))'
+    assert ws["BU21"].value == '=IF(BS21=0,0,IF(OR(BN21=1,EO21=1),BT21,IFERROR(BU20,0)+BT21))'
 
 
 def test_boot_end_literal_copy_clears_genuinely_blank_source_cells():
