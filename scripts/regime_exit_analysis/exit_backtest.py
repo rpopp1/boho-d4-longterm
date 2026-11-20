@@ -42,7 +42,7 @@ def load(month):
 
 
 def simulate(df, stop=None, vol_stop=None, profit=None, ext_days=None, ext_age=None, giveback=None,
-             profit_swing=None, reentry=None, reentry_month=False, max_days=None):
+             profit_swing=None, reentry=None, reentry_month=False, max_days=None, first_day_stop=None):
     """Return daily effective PnL and a per-trade log.
     stop: fixed $ stop (negative). vol_stop: (base, lo, hi, mode) with mode 'entry' or 'daily'.
     profit: take-profit $ level. ext_days: exit once N Extreme-regime days have been held in the trade.
@@ -66,7 +66,11 @@ def simulate(df, stop=None, vol_stop=None, profit=None, ext_days=None, ext_age=N
     the trade to have been a profit-take (cur["reason"] == "profit"), not a stop/time/giveback
     exit - i.e. only chase a position that was cut short on a win, never one proven wrong.
     max_days: time exit - go flat once the trade has been open this many trading days (day 1 = the
-    New Trade Start day), latched until the next New Trade Start like every other exit."""
+    New Trade Start day), latched until the next New Trade Start like every other exit.
+    first_day_stop: None (workbook rule: nothing can exit on a New Trade Start day, so a trade
+    whose first close is already past the stop never gets its crossing day), 'all' (the stop may
+    fire on day 1 too) or 'fresh' (only on day 1 of a trade entered from flat, not on a flip day,
+    whose PnL includes the old position's overnight move)."""
     gb_frac, gb_floor = giveback if isinstance(giveback, tuple) else (giveback, 0.0)
     ps_level, ps_thr, ps_mode, ps_dir = profit_swing if profit_swing is not None else (None, None, None, "abs")
     BL, BN, ew, ref, reg = df.BL.values, df.BN.values, df.EWMA.values, df.EWMARef.values, df.Regime.values
@@ -135,7 +139,9 @@ def simulate(df, stop=None, vol_stop=None, profit=None, ext_days=None, ext_age=N
             move = BL[t] if ps_dir == "up" else abs(BL[t])
             if thr == thr and move >= thr:  # NaN-safe: no gate until BLVol has 10 days of history
                 hit = hit or "swing"
-        if hit and BN[t] != 1:  # workbook BQ is forced to 0 on a New Trade Start day: no exit on day 1
+        day1_ok = (hit == "stop" and BN[t] == 1 and
+                   (first_day_stop == "all" or (first_day_stop == "fresh" and (t == 0 or BL[t - 1] == 0))))
+        if hit and (BN[t] != 1 or day1_ok):  # workbook BQ is forced to 0 on a New Trade Start day: no exit on day 1
             latched = True
             latch_day = 0
             cur["reason"] = hit
