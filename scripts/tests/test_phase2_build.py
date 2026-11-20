@@ -44,6 +44,7 @@ def test_jump_only_keeps_stored_weights_and_adjusts_prices(monkeypatch):
     m = MonthInputs("May", [2, 3, 4], d, [1.0, 1.1, 2.0], [1.0] * 3, [0.0] * 3, [0.0] * 3,
                     rolls=[(d[2], 20.0, 0.5)], stored=[(4, d[2], 0.6, -0.8)])
     monkeypatch.setattr(b, "load_inputs", lambda _p: {"May": m})
+    monkeypatch.setattr(b, "gate_report", lambda _m: {})
     writes, _ = b.plan_writes(None, "jump_only")
     rows, boho, weights = writes["May"]
     gap = 2.0 - (20.0 * 7.5 / 100 - 0.5)
