@@ -31,8 +31,24 @@ def test_output_names_follow_the_mode(tmp_path):
     assert output_name(tmp_path, "adjusted").name == \
         "Knox_Multimonth_BOHO_D4_Strategy - Phase 2 Back-Adjusted TEST.xlsx"
     assert output_name(tmp_path, "dry").name == "Knox_Multimonth_BOHO_D4_Strategy - Phase 2 Baseline DRY RUN.xlsx"
+    assert output_name(tmp_path, "jump_only").name ==         "Knox_Multimonth_BOHO_D4_Strategy - Phase 2 Jump-Only TEST.xlsx"
     with pytest.raises(ValueError):
         output_name(tmp_path, "other")
+
+
+def test_jump_only_keeps_stored_weights_and_adjusts_prices(monkeypatch):
+    from datetime import date
+    import phase2.build_test_workbook as b
+    from phase2.inputs import MonthInputs
+    d = [date(2021, 1, 4), date(2021, 1, 5), date(2021, 1, 6)]
+    m = MonthInputs("May", [2, 3, 4], d, [1.0, 1.1, 2.0], [1.0] * 3, [0.0] * 3, [0.0] * 3,
+                    rolls=[(d[2], 20.0, 0.5)], stored=[(4, d[2], 0.6, -0.8)])
+    monkeypatch.setattr(b, "load_inputs", lambda _p: {"May": m})
+    writes, _ = b.plan_writes(None, "jump_only")
+    rows, boho, weights = writes["May"]
+    gap = 2.0 - (20.0 * 7.5 / 100 - 0.5)
+    assert boho == pytest.approx([1.0 + gap, 1.1 + gap, 2.0])
+    assert weights == [(4, d[2], 0.6, -0.8)]
 
 
 def test_new_error_sheets():

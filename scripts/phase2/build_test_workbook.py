@@ -5,13 +5,15 @@ the Sandbox:
             same path (proves the write path changes nothing by itself)
   adjusted  back-adjusted first-block BOHO prices + Johansen weights
             recomputed on them
+  jump_only back-adjusted prices + the stored weights kept (isolates the
+            roll jump in the Z-score and regime from the weight changes)
 
 Only Data's first-block BOHO column and Johansen_Monthly's stored weight
 columns are written. The output must be a new file; Ryan's workbooks (every
 .xlsx in the folder without "Phase 2" in its name) are refused.
 
 Usage:
-  python scripts/phase2/build_test_workbook.py --source <scratch copy.xlsx> --mode dry|adjusted
+  python scripts/phase2/build_test_workbook.py --source <scratch copy.xlsx> --mode dry|adjusted|jump_only
 """
 
 import argparse
@@ -29,7 +31,8 @@ from phase2.johansen import gate_report, monthly_weights  # noqa: E402
 
 FOLDER = Path(__file__).resolve().parents[2]
 STEM = "Knox_Multimonth_BOHO_D4_Strategy - Phase 2"
-OUTPUT_NAMES = {"adjusted": f"{STEM} Back-Adjusted TEST.xlsx", "dry": f"{STEM} Baseline DRY RUN.xlsx"}
+OUTPUT_NAMES = {"adjusted": f"{STEM} Back-Adjusted TEST.xlsx", "dry": f"{STEM} Baseline DRY RUN.xlsx",
+                "jump_only": f"{STEM} Jump-Only TEST.xlsx"}
 
 
 def output_name(folder: Path, mode: str) -> Path:
@@ -64,8 +67,8 @@ def plan_writes(source: Path, mode: str) -> tuple:
     inputs = load_inputs(source)
     writes, manifest = {}, {"mode": mode, "months": {}}
     for month, m in inputs.items():
-        gaps = roll_gaps(m) if mode == "adjusted" else []
-        boho = back_adjust(m.dates, m.boho, gaps) if mode == "adjusted" else list(m.boho)
+        gaps = roll_gaps(m) if mode in ("adjusted", "jump_only") else []
+        boho = back_adjust(m.dates, m.boho, gaps) if gaps else list(m.boho)
         weights = (monthly_weights(m, boho) if mode == "adjusted"
                    else [(e, d, wb, wd) for e, d, wb, wd in m.stored])
         writes[month] = (m.rows, boho, weights)
